@@ -1,0 +1,41 @@
+# Go
+*.o
+*.a
+*.so
+.DS_Store
+dist/
+bin/
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+
+# Goland
+.idea/
+*.swp
+*.swo
+*~
+
+# Dependencies
+vendor/
+
+# Testing
+*.out
+coverage.out
+
+# Build output
+/bin/
+/dist/
+
+# Documentation
+/docs/
+*.local.md
+
+# Secrets
+.env
+.env.local
+
+# IDE
+.vscode/
+*.code-workspace
