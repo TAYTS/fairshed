@@ -122,6 +122,16 @@ func TestCompleteTask_NoUnderflow(t *testing.T) {
 	assert.Equal(t, int64(0), tenant.totalDispatched)
 }
 
+// --- NewVirtualTime ---
+
+func TestNewVirtualTime(t *testing.T) {
+	vt := NewVirtualTime()
+
+	assert.Equal(t, float64(0), vt.current)
+	assert.False(t, vt.lastUpdate.IsZero())
+	assert.Equal(t, float64(0), vt.activeWeight)
+}
+
 // --- Concurrency ---
 
 func TestConcurrentUpdateWeight(t *testing.T) {

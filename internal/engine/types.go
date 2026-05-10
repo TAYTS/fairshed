@@ -107,9 +107,11 @@ type VirtualTime struct {
 	mu           sync.RWMutex
 }
 
+// NewVirtualTime initializes a new VirtualTime instance
 func NewVirtualTime() *VirtualTime {
 	return &VirtualTime{
-		current:    0,
-		lastUpdate: time.Now(),
+		current:      0.0,
+		lastUpdate:   time.Now(),
+		activeWeight: 0.0,
 	}
 }
