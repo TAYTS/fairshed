@@ -38,30 +38,35 @@ func (t *Tenant) UpdateWeight(weight float64) error {
 	return nil
 }
 
+// GetWeight returns the tenant's fairness weight
 func (t *Tenant) GetWeight() float64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.fairnessWeight
 }
 
+// GetLastVFT returns the tenant's last virtual finish time
 func (t *Tenant) GetLastVFT() float64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.lastVFT
 }
 
+// SetLastVFT sets the tenant's last virtual finish time
 func (t *Tenant) SetLastVFT(vft float64) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.lastVFT = vft
 }
 
+// GetPendingTasks returns the number of pending tasks for the tenant
 func (t *Tenant) GetPendingTasks() int64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
 	return t.pendingTasks
 }
 
+// CompleteTask marks a task as completed, updating the tenant's state accordingly
 func (t *Tenant) CompleteTask() {
 	t.mu.Lock()
 	defer t.mu.Unlock()
