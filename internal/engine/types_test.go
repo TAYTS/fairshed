@@ -21,8 +21,8 @@ func TestNewTenant_Valid(t *testing.T) {
 		{"abc", 1000.0},
 	}
 	for _, tc := range cases {
-		tenant, err := NewTenant(tc.id, tc.weight)
-		require.NoError(t, err)
+		tenant := NewTenant(tc.id, tc.weight)
+		require.NotNil(t, tenant)
 		assert.Equal(t, tc.id, tenant.id)
 		assert.Equal(t, tc.weight, tenant.GetWeight())
 		assert.Equal(t, int64(0), tenant.GetPendingTasks())
@@ -30,43 +30,56 @@ func TestNewTenant_Valid(t *testing.T) {
 	}
 }
 
-func TestNewTenant_OutOfRange(t *testing.T) {
-	for _, weight := range []float64{0.0, 0.0009, 1000.001, -1.0, 2000.0} {
-		tenant, err := NewTenant("t1", weight)
-		assert.Error(t, err)
-		assert.Nil(t, tenant)
+func TestNewTenant_WeightClamped(t *testing.T) {
+	cases := []struct {
+		weight   float64
+		expected float64
+	}{
+		{0.0, 0.001},
+		{0.0009, 0.001},
+		{-1.0, 0.001},
+		{1000.001, 1000.0},
+		{2000.0, 1000.0},
+	}
+	for _, tc := range cases {
+		tenant := NewTenant("t1", tc.weight)
+		assert.Equal(t, tc.expected, tenant.GetWeight(), "weight %v should clamp to %v", tc.weight, tc.expected)
 	}
 }
 
 // --- UpdateWeight ---
 
 func TestUpdateWeight_Valid(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	for _, w := range []float64{0.001, 1.0, 500.0, 1000.0} {
-		require.NoError(t, tenant.UpdateWeight(w))
+		tenant.UpdateWeight(w)
 		assert.Equal(t, w, tenant.GetWeight())
 	}
 }
 
-func TestUpdateWeight_OutOfRange(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
-
-	for _, w := range []float64{0.0, 0.0009, 1000.001, -1.0} {
-		assert.Error(t, tenant.UpdateWeight(w))
+func TestUpdateWeight_Clamped(t *testing.T) {
+	cases := []struct {
+		input    float64
+		expected float64
+	}{
+		{0.0, 0.001},
+		{0.0009, 0.001},
+		{-1.0, 0.001},
+		{1000.001, 1000.0},
+		{2000.0, 1000.0},
 	}
-	// Weight must remain unchanged after all rejected updates.
-	assert.Equal(t, 1.0, tenant.GetWeight())
+	for _, tc := range cases {
+		tenant := NewTenant("t1", 1.0)
+		tenant.UpdateWeight(tc.input)
+		assert.Equal(t, tc.expected, tenant.GetWeight(), "UpdateWeight(%v) should clamp to %v", tc.input, tc.expected)
+	}
 }
 
 // --- VFT ---
 
 func TestSetAndGetLastVFT(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
-
+	tenant := NewTenant("t1", 1.0)
 	tenant.SetLastVFT(42.5)
 	assert.Equal(t, 42.5, tenant.GetLastVFT())
 }
@@ -74,9 +87,7 @@ func TestSetAndGetLastVFT(t *testing.T) {
 // --- NewTask ---
 
 func TestNewTask_IncreasesPendingCount(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
-
+	tenant := NewTenant("t1", 1.0)
 	task := tenant.NewTask(2.0)
 	require.NotNil(t, task)
 	assert.Equal(t, int64(1), tenant.GetPendingTasks())
@@ -86,8 +97,7 @@ func TestNewTask_IncreasesPendingCount(t *testing.T) {
 }
 
 func TestNewTask_IDIsUnique(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	ids := make(map[string]bool)
 	for range 10 {
@@ -100,8 +110,7 @@ func TestNewTask_IDIsUnique(t *testing.T) {
 // --- CompleteTask ---
 
 func TestCompleteTask(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	tenant.NewTask(1.0)
 	tenant.NewTask(1.0)
@@ -113,8 +122,7 @@ func TestCompleteTask(t *testing.T) {
 }
 
 func TestCompleteTask_NoUnderflow(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	// Completing with no pending tasks must not underflow.
 	tenant.CompleteTask()
@@ -135,15 +143,14 @@ func TestNewVirtualTime(t *testing.T) {
 // --- Concurrency ---
 
 func TestConcurrentUpdateWeight(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	var wg sync.WaitGroup
 	for i := range 100 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()
-			_ = tenant.UpdateWeight(0.001 + float64(i%1000))
+			tenant.UpdateWeight(0.001 + float64(i%1000))
 		}(i)
 	}
 	wg.Wait()
@@ -154,8 +161,7 @@ func TestConcurrentUpdateWeight(t *testing.T) {
 }
 
 func TestConcurrentSetGetVFT(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	var wg sync.WaitGroup
 	for i := range 200 {
@@ -173,8 +179,7 @@ func TestConcurrentSetGetVFT(t *testing.T) {
 }
 
 func TestConcurrentNewTaskAndComplete(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	const n = 500
 	var wg sync.WaitGroup
@@ -193,14 +198,13 @@ func TestConcurrentNewTaskAndComplete(t *testing.T) {
 }
 
 func TestConcurrentMixedOps(t *testing.T) {
-	tenant, err := NewTenant("t1", 1.0)
-	require.NoError(t, err)
+	tenant := NewTenant("t1", 1.0)
 
 	const n = 100
 	var wg sync.WaitGroup
 	wg.Add(n * 4)
 	for i := range n {
-		go func(i int) { defer wg.Done(); _ = tenant.UpdateWeight(float64(i%1000) + 0.001) }(i)
+		go func(i int) { defer wg.Done(); tenant.UpdateWeight(float64(i%1000) + 0.001) }(i)
 		go func(i int) { defer wg.Done(); tenant.SetLastVFT(float64(i)) }(i)
 		go func() { defer wg.Done(); tenant.NewTask(1.0) }()
 		go func() { defer wg.Done(); tenant.CompleteTask() }()

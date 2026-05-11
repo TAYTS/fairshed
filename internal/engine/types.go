@@ -2,6 +2,7 @@ package engine
 
 import (
 	"fmt"
+	"math"
 	"sync"
 	"time"
 )
@@ -16,26 +17,22 @@ type Tenant struct {
 	mu              sync.RWMutex
 }
 
-func isInvalidWeight(weight float64) bool {
-	return weight < 0.001 || weight > 1000
+func clampWeight(weight float64) float64 {
+	return math.Max(0.001, math.Min(1000.0, weight))
 }
 
-func NewTenant(id string, weight float64) (*Tenant, error) {
-	if isInvalidWeight(weight) {
-		return nil, fmt.Errorf("weight %f out of range (0.001 - 1000)", weight)
-	}
-	return &Tenant{id: id, weight: weight}, nil
+// NewTenant creates a new tenant with the given weight.
+// If weight is out of the range [0.001, 1000], it will be clamped to the nearest boundary.
+func NewTenant(id string, weight float64) *Tenant {
+	return &Tenant{id: id, weight: clampWeight(weight)}
 }
 
-// UpdateWeight updates the tenant's fairness weight
-func (t *Tenant) UpdateWeight(weight float64) error {
-	if isInvalidWeight(weight) {
-		return fmt.Errorf("weight %f out of range (0.001 - 1000)", weight)
-	}
+// UpdateWeight updates the tenant's fairness weight.
+// If weight is out of the range [0.001, 1000], it will be clamped to the nearest boundary.
+func (t *Tenant) UpdateWeight(weight float64) {
 	t.mu.Lock()
-	t.weight = weight
+	t.weight = clampWeight(weight)
 	t.mu.Unlock()
-	return nil
 }
 
 // GetWeight returns the tenant's fairness weight
