@@ -8,7 +8,7 @@ import (
 
 // Tenant represents a single tenant with its fairness properties
 type Tenant struct {
-	ID              string
+	id              string
 	fairnessWeight  float64 // Fairness weight (default 1.0, range 0.001 - 1000)
 	lastVFT         float64 // Last virtual finish time for this tenant
 	pendingTasks    int64   // Count of backlog tasks
@@ -24,7 +24,7 @@ func NewTenant(id string, weight float64) (*Tenant, error) {
 	if isInvalidWeight(weight) {
 		return nil, fmt.Errorf("weight %f out of range (0.001 - 1000)", weight)
 	}
-	return &Tenant{ID: id, fairnessWeight: weight}, nil
+	return &Tenant{id: id, fairnessWeight: weight}, nil
 }
 
 // UpdateWeight updates the tenant's fairness weight
@@ -82,8 +82,8 @@ func (t *Tenant) NewTask(cost float64) *Task {
 	seq := t.pendingTasks + t.totalDispatched
 	t.mu.Unlock()
 	return &Task{
-		id:       fmt.Sprintf("%s-%d", t.ID, seq),
-		tenantID: t.ID,
+		id:       fmt.Sprintf("%s-%d", t.id, seq),
+		tenantID: t.id,
 		cost:     cost,
 		arrived:  time.Now(),
 	}

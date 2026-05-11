@@ -23,7 +23,7 @@ func TestNewTenant_Valid(t *testing.T) {
 	for _, tc := range cases {
 		tenant, err := NewTenant(tc.id, tc.weight)
 		require.NoError(t, err)
-		assert.Equal(t, tc.id, tenant.ID)
+		assert.Equal(t, tc.id, tenant.id)
 		assert.Equal(t, tc.weight, tenant.GetWeight())
 		assert.Equal(t, int64(0), tenant.GetPendingTasks())
 		assert.Equal(t, float64(0), tenant.GetLastVFT())
