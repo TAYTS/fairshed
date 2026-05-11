@@ -9,7 +9,7 @@ import (
 // Tenant represents a single tenant with its fairness properties
 type Tenant struct {
 	id              string
-	fairnessWeight  float64 // Fairness weight (default 1.0, range 0.001 - 1000)
+	weight          float64 // Fairness weight (default 1.0, range 0.001 - 1000)
 	lastVFT         float64 // Last virtual finish time for this tenant
 	pendingTasks    int64   // Count of backlog tasks
 	totalDispatched int64   // Lifetime dispatch count
@@ -24,7 +24,7 @@ func NewTenant(id string, weight float64) (*Tenant, error) {
 	if isInvalidWeight(weight) {
 		return nil, fmt.Errorf("weight %f out of range (0.001 - 1000)", weight)
 	}
-	return &Tenant{id: id, fairnessWeight: weight}, nil
+	return &Tenant{id: id, weight: weight}, nil
 }
 
 // UpdateWeight updates the tenant's fairness weight
@@ -33,7 +33,7 @@ func (t *Tenant) UpdateWeight(weight float64) error {
 		return fmt.Errorf("weight %f out of range (0.001 - 1000)", weight)
 	}
 	t.mu.Lock()
-	t.fairnessWeight = weight
+	t.weight = weight
 	t.mu.Unlock()
 	return nil
 }
@@ -42,7 +42,7 @@ func (t *Tenant) UpdateWeight(weight float64) error {
 func (t *Tenant) GetWeight() float64 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.fairnessWeight
+	return t.weight
 }
 
 // GetLastVFT returns the tenant's last virtual finish time
