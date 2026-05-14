@@ -14,7 +14,11 @@ type VTTracker struct {
 // NewVTTracker creates a new VTTracker
 func NewVTTracker() *VTTracker {
 	return &VTTracker{
-		vt: NewVirtualTime(),
+		vt: &VirtualTime{
+			current:      0.0,
+			lastUpdate:   time.Now(),
+			activeWeight: 0.0,
+		},
 	}
 }
 
