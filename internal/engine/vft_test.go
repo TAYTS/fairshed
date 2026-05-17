@@ -202,3 +202,55 @@ func TestConcurrentComputeVFT_MultiTenant(t *testing.T) {
 	// No data race — race detector will catch issues
 	assert.GreaterOrEqual(t, e.vtTracker.vt.ActiveWeight, 0.0)
 }
+
+// --- Benchmarks ---
+
+// BenchmarkComputeVFT_SingleTenant-4   	 1264330	       934.9 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkComputeVFT_SingleTenant(b *testing.B) {
+	e := NewVFTEngine()
+
+	for b.Loop() {
+		e.ComputeVFT(&Task{TenantId: "t1", Cost: 1.0})
+	}
+}
+
+// BenchmarkComputeVFT_MultiTenant-4   	 1254723	       939.7 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkComputeVFT_MultiTenant(b *testing.B) {
+	e := NewVFTEngine()
+	tenants := []string{"a", "b", "c", "d"}
+
+	for b.Loop() {
+		e.ComputeVFT(&Task{TenantId: tenants[b.N%len(tenants)], Cost: 1.0})
+	}
+}
+
+// BenchmarkComputeVFT_Concurrent-4   	  833314	      1425 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkComputeVFT_Concurrent(b *testing.B) {
+	e := NewVFTEngine()
+
+	b.RunParallel(func(pb *testing.PB) {
+		for pb.Next() {
+			e.ComputeVFT(&Task{TenantId: "t1", Cost: 1.0})
+		}
+	})
+}
+
+// BenchmarkOnTaskDispatched-4   	  599037	      2001 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkOnTaskDispatched(b *testing.B) {
+	e := NewVFTEngine()
+
+	for b.Loop() {
+		e.ComputeVFT(&Task{TenantId: "t1", Cost: 1.0})
+		e.OnTaskDispatched(&Task{TenantId: "t1"})
+	}
+}
+
+// BenchmarkSetTenantWeight-4   	 1637246	       739.6 ns/op	       0 B/op	       0 allocs/op
+func BenchmarkSetTenantWeight(b *testing.B) {
+	e := NewVFTEngine()
+	e.ComputeVFT(&Task{TenantId: "t1", Cost: 1.0}) // tenant has pending task
+
+	for b.Loop() {
+		e.SetTenantWeight("t1", 2.0)
+	}
+}
