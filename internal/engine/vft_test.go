@@ -43,7 +43,7 @@ func TestComputeVFT_VTAhead(t *testing.T) {
 
 	// Force lastVFT to a value behind current virtual time
 	e.ComputeVFT(&Task{tenantID: "t1", cost: 1.0}) // establishes lastVFT
-	e.OnTaskDispatched(&Task{tenantID: "t1"})        // clear pending so activeWeight resets
+	e.OnTaskDispatched(&Task{tenantID: "t1"})      // clear pending so activeWeight resets
 
 	// Set lastVFT=0 directly to simulate vt > lastVFT
 	e.tenants["t1"].lastVFT = 0
@@ -69,6 +69,21 @@ func TestComputeVFT_MultiTenant(t *testing.T) {
 	vftB2 := e.ComputeVFT(&Task{tenantID: "b", cost: 1.0})
 	assert.Greater(t, vftA2, vftA, "tenant a VFT must advance")
 	assert.Greater(t, vftB2, vftB, "tenant b VFT must advance")
+}
+
+func TestComputeVFT_WeightedOrdering(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("heavy", 4.0) // higher weight -> lower cost per unit -> smaller VFT increment
+	e.SetTenantWeight("light", 1.0)
+
+	// Same cost, but heavy tenant has 4x the weight -> its VFT advances 4x slower
+	vftHeavy := e.ComputeVFT(&Task{tenantID: "heavy", cost: 4.0})
+	vftLight := e.ComputeVFT(&Task{tenantID: "light", cost: 4.0})
+
+	// heavy: 0 + 4.0/4.0 = 1.0; light: 0 + 4.0/1.0 = 4.0
+	assert.InDelta(t, 1.0, vftHeavy, 0.01, "heavy tenant VFT = cost/weight = 1.0")
+	assert.InDelta(t, 4.0, vftLight, 0.01, "light tenant VFT = cost/weight = 4.0")
+	assert.Less(t, vftHeavy, vftLight, "higher-weight tenant should get an earlier finish time")
 }
 
 // --- OnTaskDispatched ---
