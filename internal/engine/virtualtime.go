@@ -15,9 +15,9 @@ type VTTracker struct {
 func NewVTTracker() *VTTracker {
 	return &VTTracker{
 		vt: &VirtualTime{
-			current:      0.0,
-			lastUpdate:   time.Now(),
-			activeWeight: 0.0,
+			Current:      0.0,
+			LastUpdate:   time.Now(),
+			ActiveWeight: 0.0,
 		},
 	}
 }
@@ -29,20 +29,20 @@ func (vt *VTTracker) Advance() float64 {
 	defer vt.mu.Unlock()
 
 	// no backlog tenants, V(t) does not advance
-	if vt.vt.activeWeight == 0 {
-		vt.vt.lastUpdate = time.Now()
-		return vt.vt.current
+	if vt.vt.ActiveWeight == 0 {
+		vt.vt.LastUpdate = time.Now()
+		return vt.vt.Current
 	}
 
 	now := time.Now()
-	elapsed := now.Sub(vt.vt.lastUpdate).Seconds()
+	elapsed := now.Sub(vt.vt.LastUpdate).Seconds()
 
 	// V(t) advances inversely proportional to active weight
-	delta := elapsed / vt.vt.activeWeight
-	vt.vt.current += delta
-	vt.vt.lastUpdate = now
+	delta := elapsed / vt.vt.ActiveWeight
+	vt.vt.Current += delta
+	vt.vt.LastUpdate = now
 
-	return vt.vt.current
+	return vt.vt.Current
 }
 
 // UpdateActiveWeight adjusts the sum of active tenant weights
@@ -50,9 +50,9 @@ func (vt *VTTracker) UpdateActiveWeight(delta float64) {
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
 
-	vt.vt.activeWeight += delta
-	if vt.vt.activeWeight < 0 {
-		vt.vt.activeWeight = 0
+	vt.vt.ActiveWeight += delta
+	if vt.vt.ActiveWeight < 0 {
+		vt.vt.ActiveWeight = 0
 	}
 }
 

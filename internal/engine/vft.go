@@ -26,29 +26,29 @@ func (e *VFTEngine) ComputeVFT(task *Task) float64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant, exists := e.tenants[task.tenantID]
+	tenant, exists := e.tenants[task.TenantId]
 	if !exists {
 		// New tenant, create with default weight
-		tenant = &Tenant{id: task.tenantID, weight: 1.0}
-		e.tenants[task.tenantID] = tenant
+		tenant = &Tenant{Id: task.TenantId, Weight: 1.0}
+		e.tenants[task.TenantId] = tenant
 	}
 
 	// Get current virtual time
 	vt := e.vtTracker.Get()
 
 	// Compute virtual start time
-	vst := math.Max(vt, tenant.lastVFT)
+	vst := math.Max(vt, tenant.LastVFT)
 
 	// Compute virtual finish time
-	vft := vst + (task.cost / tenant.weight)
+	vft := vst + (task.Cost / tenant.Weight)
 
 	// Update tenant state
-	tenant.lastVFT = vft
-	tenant.pendingTasks++
+	tenant.LastVFT = vft
+	tenant.PendingTasks++
 
 	// If this is the first task, add tenant weight to active weight
-	if tenant.pendingTasks == 1 {
-		e.vtTracker.UpdateActiveWeight(tenant.weight)
+	if tenant.PendingTasks == 1 {
+		e.vtTracker.UpdateActiveWeight(tenant.Weight)
 	}
 
 	return vft
@@ -59,18 +59,18 @@ func (e *VFTEngine) OnTaskDispatched(task *Task) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant, exists := e.tenants[task.tenantID]
+	tenant, exists := e.tenants[task.TenantId]
 	if !exists {
 		return
 	}
 
-	if tenant.pendingTasks > 0 {
-		tenant.pendingTasks--
-		tenant.totalDispatched++
+	if tenant.PendingTasks > 0 {
+		tenant.PendingTasks--
+		tenant.TotalDispatched++
 
 		// if no more pending task, remove weight from active weight
-		if tenant.pendingTasks == 0 {
-			e.vtTracker.UpdateActiveWeight(-tenant.weight)
+		if tenant.PendingTasks == 0 {
+			e.vtTracker.UpdateActiveWeight(-tenant.Weight)
 		}
 	}
 }
@@ -85,15 +85,15 @@ func (e *VFTEngine) SetTenantWeight(tenantID string, weight float64) {
 
 	tenant, exists := e.tenants[tenantID]
 	if !exists {
-		tenant = &Tenant{id: tenantID, weight: weight}
+		tenant = &Tenant{Id: tenantID, Weight: weight}
 		e.tenants[tenantID] = tenant
 		return
 	}
 
 	// if tenant has pending tasks, adjust active weight
-	if tenant.pendingTasks > 0 {
-		delta := weight - tenant.weight
+	if tenant.PendingTasks > 0 {
+		delta := weight - tenant.Weight
 		e.vtTracker.UpdateActiveWeight(delta)
 	}
-	tenant.weight = weight
+	tenant.Weight = weight
 }

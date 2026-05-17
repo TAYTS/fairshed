@@ -71,20 +71,20 @@ func TestUpdateActiveWeight_Positive(t *testing.T) {
 	tracker := NewVTTracker()
 
 	tracker.UpdateActiveWeight(1.5)
-	assert.Equal(t, 1.5, tracker.vt.activeWeight, "activeWeight after +1.5")
+	assert.Equal(t, 1.5, tracker.vt.ActiveWeight, "activeWeight after +1.5")
 
 	tracker.UpdateActiveWeight(2.5)
-	assert.Equal(t, 4.0, tracker.vt.activeWeight, "activeWeight after +2.5")
+	assert.Equal(t, 4.0, tracker.vt.ActiveWeight, "activeWeight after +2.5")
 }
 
 func TestUpdateActiveWeight_Negative(t *testing.T) {
 	tracker := NewVTTracker()
 
 	tracker.UpdateActiveWeight(5.0)
-	assert.Equal(t, 5.0, tracker.vt.activeWeight, "activeWeight after +5.0")
+	assert.Equal(t, 5.0, tracker.vt.ActiveWeight, "activeWeight after +5.0")
 
 	tracker.UpdateActiveWeight(-3.0)
-	assert.Equal(t, 2.0, tracker.vt.activeWeight, "activeWeight after -3.0")
+	assert.Equal(t, 2.0, tracker.vt.ActiveWeight, "activeWeight after -3.0")
 }
 
 func TestUpdateActiveWeight_BelowZero(t *testing.T) {
@@ -92,7 +92,7 @@ func TestUpdateActiveWeight_BelowZero(t *testing.T) {
 
 	tracker.UpdateActiveWeight(1.0)
 	tracker.UpdateActiveWeight(-5.0)
-	assert.Equal(t, 0.0, tracker.vt.activeWeight, "activeWeight should be clamped to 0")
+	assert.Equal(t, 0.0, tracker.vt.ActiveWeight, "activeWeight should be clamped to 0")
 }
 
 // --- Get ---
@@ -168,7 +168,7 @@ func TestConcurrentUpdateActiveWeight(t *testing.T) {
 	}
 	wg.Wait()
 
-	assert.Equal(t, float64(goroutines), tracker.vt.activeWeight, "activeWeight should equal sum of all increments")
+	assert.Equal(t, float64(goroutines), tracker.vt.ActiveWeight, "activeWeight should equal sum of all increments")
 }
 
 func TestConcurrentUpdateActiveWeightWithNegative(t *testing.T) {
@@ -192,7 +192,7 @@ func TestConcurrentUpdateActiveWeightWithNegative(t *testing.T) {
 	wg.Wait()
 
 	// Exact final value is non-deterministic due to scheduling, but the clamp invariant must hold
-	assert.GreaterOrEqual(t, tracker.vt.activeWeight, 0.0, "activeWeight should never go negative")
+	assert.GreaterOrEqual(t, tracker.vt.ActiveWeight, 0.0, "activeWeight should never go negative")
 }
 
 func TestConcurrentAdvanceAndUpdateWeight(t *testing.T) {
@@ -216,7 +216,7 @@ func TestConcurrentAdvanceAndUpdateWeight(t *testing.T) {
 	wg.Wait()
 
 	// After mixed ops, activeWeight should be non-negative and VT should not regress
-	assert.GreaterOrEqual(t, tracker.vt.activeWeight, 0.0, "activeWeight should never be negative")
+	assert.GreaterOrEqual(t, tracker.vt.ActiveWeight, 0.0, "activeWeight should never be negative")
 	assert.GreaterOrEqual(t, tracker.Advance(), 0.0, "virtual time should never be negative")
 }
 
