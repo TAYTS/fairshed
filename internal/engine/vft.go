@@ -5,6 +5,11 @@ import (
 	"sync"
 )
 
+// burstFactor reduces the VFT advance for burst-absorbed tasks.
+// A value of 0.5 gives ~2x throughput during a burst window.
+// TODO: make this configurable per tenant.
+const burstFactor = 0.5
+
 // VFTEngine computes virtual finish times for tasks
 type VFTEngine struct {
 	vtTracker *VTTracker
@@ -40,7 +45,16 @@ func (e *VFTEngine) ComputeVFT(task *Task) float64 {
 	vst := math.Max(vt, tenant.LastVFT)
 
 	// Compute virtual finish time
-	vft := vst + (task.Cost / tenant.Weight)
+	var vft float64
+
+	// Try absorb burst cost
+	if tenant.BurstBucket != nil && tenant.BurstBucket.TryConsume(task.Cost) {
+		// absorb burst, reduce cost
+		vft = vst + (task.Cost/tenant.Weight)*burstFactor
+	} else {
+		// normal cost
+		vft = vst + (task.Cost / tenant.Weight)
+	}
 
 	// Update tenant state
 	tenant.LastVFT = vft

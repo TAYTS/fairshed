@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/tayts/fairsched/internal/burst"
 )
 
 // --- ComputeVFT ---
@@ -84,6 +85,54 @@ func TestComputeVFT_WeightedOrdering(t *testing.T) {
 	assert.InDelta(t, 1.0, vftHeavy, 0.01, "heavy tenant VFT = cost/weight = 1.0")
 	assert.InDelta(t, 4.0, vftLight, 0.01, "light tenant VFT = cost/weight = 4.0")
 	assert.Less(t, vftHeavy, vftLight, "higher-weight tenant should get an earlier finish time")
+}
+
+// --- Burst ---
+
+func TestComputeVFT_BurstAbsorbed_ReducesVFT(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("t1", 1.0)
+	e.tenants["t1"].BurstBucket = burst.NewBurstBucket(10.0, 0.0) // full bucket, no refill
+
+	vft := e.ComputeVFT(&Task{TenantId: "t1", Cost: 4.0})
+
+	// Normal VFT = 4.0/1.0 = 4.0; burst reduces to 4.0 * 0.5 = 2.0
+	assert.InDelta(t, 2.0, vft, 0.01, "burst absorbed: VFT should be halved")
+}
+
+func TestComputeVFT_BurstExhausted_FallsBackToNormalVFT(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("t1", 1.0)
+	e.tenants["t1"].BurstBucket = burst.NewBurstBucket(10.0, 0.0)
+	e.tenants["t1"].BurstBucket.Tokens = 0.0 // drain bucket
+
+	vft := e.ComputeVFT(&Task{TenantId: "t1", Cost: 4.0})
+
+	assert.InDelta(t, 4.0, vft, 0.01, "exhausted bucket: VFT should be full cost/weight")
+}
+
+func TestComputeVFT_BurstInsufficientTokens_FallsBackToNormalVFT(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("t1", 1.0)
+	e.tenants["t1"].BurstBucket = burst.NewBurstBucket(10.0, 0.0)
+	e.tenants["t1"].BurstBucket.Tokens = 1.0 // not enough for cost=4.0
+
+	vft := e.ComputeVFT(&Task{TenantId: "t1", Cost: 4.0})
+
+	assert.InDelta(t, 4.0, vft, 0.01, "insufficient tokens: VFT should be full cost/weight")
+}
+
+func TestComputeVFT_BurstLowerVFTThanNoBurst(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("burst-tenant", 1.0)
+	e.SetTenantWeight("normal-tenant", 1.0)
+	e.tenants["burst-tenant"].BurstBucket = burst.NewBurstBucket(10.0, 0.0)
+
+	vftBurst := e.ComputeVFT(&Task{TenantId: "burst-tenant", Cost: 4.0})
+	vftNormal := e.ComputeVFT(&Task{TenantId: "normal-tenant", Cost: 4.0})
+
+	assert.Less(t, vftBurst, vftNormal,
+		"burst tenant should have lower VFT and be scheduled before non-burst tenant")
 }
 
 // --- OnTaskDispatched ---

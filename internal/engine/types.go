@@ -3,6 +3,8 @@ package engine
 import (
 	"sync"
 	"time"
+
+	"github.com/tayts/fairsched/internal/burst"
 )
 
 // Tenant represents a single tenant with its fairness properties
@@ -12,6 +14,7 @@ type Tenant struct {
 	LastVFT         float64 // Last virtual finish time for this tenant
 	PendingTasks    int64   // Count of backlog tasks
 	TotalDispatched int64   // Lifetime dispatch count
+	BurstBucket     *burst.BurstBucket
 }
 
 // Task represents a dispatchable unit of work
