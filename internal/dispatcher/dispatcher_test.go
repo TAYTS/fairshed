@@ -2,6 +2,7 @@ package dispatcher
 
 import (
 	"context"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -97,7 +98,6 @@ func TestDequeueNonBlocking_StoppedReturnsError(t *testing.T) {
 	assert.ErrorIs(t, err, ErrStopped)
 }
 
-
 func TestDequeueNonBlocking_MultiTenant_Fairness(t *testing.T) {
 	d := NewDispatcher(engine.NewVFTEngine())
 
@@ -152,7 +152,6 @@ func TestEnqueueDequeue_MultiTenant_WeightedOrdering(t *testing.T) {
 		assert.Equal(t, "light", task.TenantId, "light tasks should follow")
 	}
 }
-
 
 // --- Dequeue (blocking) ---
 
@@ -357,5 +356,42 @@ func BenchmarkConcurrentEnqueueDequeue_PreallocatedTasks(b *testing.B) {
 		}
 		taskIdx += n
 		wg.Wait()
+	}
+}
+
+func BenchmarkStress_1000Tenants_10KTasks(b *testing.B) {
+	const (
+		numTenants = 1000
+		numTasks   = 10000
+	)
+
+	// Pre-compute tenant IDs and tasks to exclude string allocation from measurement
+	b.StopTimer()
+	tenantIDs := make([]string, numTenants)
+	for i := range numTenants {
+		tenantIDs[i] = fmt.Sprintf("tenant-%d", i)
+	}
+	tasks := make([]*engine.Task, numTasks)
+	for i := range numTasks {
+		tasks[i] = newTask(tenantIDs[i%numTenants], 1.0)
+	}
+
+	// Exclude dispatcher + weight setup from measurement
+	d := NewDispatcher(engine.NewVFTEngine())
+	for i, id := range tenantIDs {
+		d.vftEngine.SetTenantWeight(id, 1.0+float64(i%10)) // weights 1.0–10.0
+	}
+	b.StartTimer()
+
+	for b.Loop() {
+		// Measure: enqueue 10K tasks across 1000 tenants
+		for _, task := range tasks {
+			_ = d.Enqueue(task)
+		}
+
+		// Measure: drain all tasks in VFT order
+		for d.Len() > 0 {
+			_, _ = d.DequeueNonBlocking()
+		}
 	}
 }
