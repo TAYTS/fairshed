@@ -9,6 +9,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/tayts/fairsched/internal/engine"
+	"github.com/tayts/fairsched/internal/limiter"
 )
 
 func newTask(tenantID string, cost float64) *engine.Task {
@@ -253,6 +254,132 @@ func TestConcurrentEnqueueDequeue(t *testing.T) {
 			break
 		}
 	}
+}
+
+// --- AddTenant ---
+
+func TestAddTenant_SetsWeight(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Weight: 4.0})
+
+	// Enqueue a task; VFT should reflect the configured weight
+	task := newTask("t1", 4.0)
+	assert.NoError(t, d.Enqueue(task))
+	assert.InDelta(t, 1.0, task.VFT, 0.01, "VFT = cost/weight = 4.0/4.0 = 1.0")
+}
+
+func TestAddTenant_ZeroWeightUsesDefault(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Weight: 0})
+
+	task := newTask("t1", 1.0)
+	assert.NoError(t, d.Enqueue(task))
+	assert.InDelta(t, 1.0, task.VFT, 0.01, "default weight 1.0: VFT = 1.0/1.0 = 1.0")
+}
+
+func TestAddTenant_NegativeWeightUsesDefault(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Weight: -1.0})
+
+	task := newTask("t1", 1.0)
+	assert.NoError(t, d.Enqueue(task))
+	assert.InDelta(t, 1.0, task.VFT, 0.01, "default weight 1.0: VFT = 1.0/1.0 = 1.0")
+}
+
+func TestAddTenant_LimitEnforced(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Limit: 2})
+
+	assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+	assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+	assert.ErrorIs(t, d.Enqueue(newTask("t1", 1.0)), limiter.ErrLimitExceeded,
+		"third enqueue must be rejected when limit=2")
+}
+
+func TestAddTenant_ZeroLimitUsesDefault(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Limit: 0})
+
+	// Fill up to the default limit without error
+	for range defaultLimit {
+		assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+	}
+	// One over the default limit must be rejected
+	assert.ErrorIs(t, d.Enqueue(newTask("t1", 1.0)), limiter.ErrLimitExceeded,
+		"zero Limit should apply the default limit of 100")
+}
+
+func TestAddTenant_NegativeLimitUsesDefault(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Limit: -1})
+
+	// Fill up to the default limit without error
+	for range defaultLimit {
+		assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+	}
+	// One over the default limit must be rejected
+	assert.ErrorIs(t, d.Enqueue(newTask("t1", 1.0)), limiter.ErrLimitExceeded,
+		"zero Limit should apply the default limit of 100")
+}
+
+func TestAddTenant_NoBurstWhenCapacityZero(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Weight: 1.0, BurstCapacity: 0})
+
+	task := newTask("t1", 4.0)
+	assert.NoError(t, d.Enqueue(task))
+	// No burst: VFT = cost/weight = 4.0/1.0 = 4.0
+	assert.InDelta(t, 4.0, task.VFT, 0.01, "VFT should be full cost/weight with no burst")
+}
+
+func TestAddTenant_NoBurstWhenCapacityIsNegative(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Weight: 1.0, BurstCapacity: -1.0})
+
+	task := newTask("t1", 4.0)
+	assert.NoError(t, d.Enqueue(task))
+	// No burst: VFT = cost/weight = 4.0/1.0 = 4.0
+	assert.InDelta(t, 4.0, task.VFT, 0.01, "VFT should be full cost/weight with no burst")
+}
+
+func TestAddTenant_BurstReducesVFT(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	// BurstRate:0 → no refill, so the full bucket is available for the first task
+	d.AddTenant("t1", TenantConfig{Weight: 1.0, BurstCapacity: 10.0, BurstRate: 0.0})
+
+	task := newTask("t1", 4.0)
+	assert.NoError(t, d.Enqueue(task))
+	// Burst absorbed: VFT = (cost/weight) * burstFactor = 4.0 * 0.5 = 2.0
+	assert.InDelta(t, 2.0, task.VFT, 0.01, "VFT should be halved when burst is absorbed")
+}
+
+// --- Complete ---
+
+func TestComplete_ReleasesSlot(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.AddTenant("t1", TenantConfig{Limit: 1})
+
+	// Fill the single slot
+	assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+
+	// Slot is taken: further enqueue must fail
+	assert.ErrorIs(t, d.Enqueue(newTask("t1", 1.0)), limiter.ErrLimitExceeded)
+
+	// Dequeue and complete the task
+	task, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+	d.Complete(task)
+
+	// Slot is free: enqueue must succeed
+	assert.NoError(t, d.Enqueue(newTask("t1", 1.0)))
+}
+
+func TestComplete_DoesNotPanicOnUnknownTenant(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	// Complete on a task whose tenant has no registered limit must not panic
+	assert.NotPanics(t, func() {
+		d.Complete(&engine.Task{TenantId: "ghost"})
+	})
 }
 
 // --- Benchmarks ---
