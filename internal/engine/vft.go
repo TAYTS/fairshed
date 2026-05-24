@@ -3,12 +3,16 @@ package engine
 import (
 	"math"
 	"sync"
+
+	"github.com/tayts/fairsched/internal/burst"
 )
 
 // burstFactor reduces the VFT advance for burst-absorbed tasks.
 // A value of 0.5 gives ~2x throughput during a burst window.
 // TODO: make this configurable per tenant.
 const burstFactor = 0.5
+
+const defaultTenantWeight float64 = 1.0
 
 // VFTEngine computes virtual finish times for tasks
 type VFTEngine struct {
@@ -31,12 +35,7 @@ func (e *VFTEngine) ComputeVFT(task *Task) float64 {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant, exists := e.tenants[task.TenantId]
-	if !exists {
-		// New tenant, create with default weight
-		tenant = &Tenant{Id: task.TenantId, Weight: 1.0}
-		e.tenants[task.TenantId] = tenant
-	}
+	tenant := e.getOrCreateTenant(task.TenantId)
 
 	// Get current virtual time
 	vt := e.vtTracker.Get()
@@ -97,10 +96,8 @@ func (e *VFTEngine) SetTenantWeight(tenantID string, weight float64) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant, exists := e.tenants[tenantID]
-	if !exists {
-		tenant = &Tenant{Id: tenantID, Weight: weight}
-		e.tenants[tenantID] = tenant
+	tenant := e.getOrCreateTenant(tenantID)
+	if tenant.Weight == weight {
 		return
 	}
 
@@ -110,4 +107,28 @@ func (e *VFTEngine) SetTenantWeight(tenantID string, weight float64) {
 		e.vtTracker.UpdateActiveWeight(delta)
 	}
 	tenant.Weight = weight
+}
+
+// SetTenantBurst sets the burst bucket for a tenant
+func (e *VFTEngine) SetTenantBurst(tenantId string, bucket *burst.BurstBucket) {
+	if bucket == nil {
+		return
+	}
+
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	e.getOrCreateTenant(tenantId).BurstBucket = bucket
+}
+
+// getOrCreateTenant returns the tenant for the given ID, creating it with default
+// settings if it does not already exist.
+// Caller must hold the mutex lock.
+func (e *VFTEngine) getOrCreateTenant(id string) *Tenant {
+	tenant, exists := e.tenants[id]
+	if !exists {
+		tenant = &Tenant{Id: id, Weight: defaultTenantWeight}
+		e.tenants[id] = tenant
+	}
+	return tenant
 }

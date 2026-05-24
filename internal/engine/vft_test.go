@@ -135,6 +135,50 @@ func TestComputeVFT_BurstLowerVFTThanNoBurst(t *testing.T) {
 		"burst tenant should have lower VFT and be scheduled before non-burst tenant")
 }
 
+// --- SetTenantBurst ---
+
+func TestSetTenantBurst_ReducesVFTOnExistingTenant(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantWeight("t1", 1.0)
+	e.SetTenantBurst("t1", burst.NewBurstBucket(10.0, 0.0)) // full bucket, no refill
+
+	vft := e.ComputeVFT(&Task{TenantId: "t1", Cost: 4.0})
+
+	// Burst absorbed: VFT = (cost/weight) * burstFactor = 4.0 * 0.5 = 2.0
+	assert.InDelta(t, 2.0, vft, 0.01, "burst bucket should halve VFT on existing tenant")
+}
+
+func TestSetTenantBurst_AutoCreatesTenantWithDefaultWeight(t *testing.T) {
+	e := NewVFTEngine()
+	e.SetTenantBurst("new-tenant", burst.NewBurstBucket(10.0, 0.0))
+
+	tenant, exists := e.tenants["new-tenant"]
+	assert.True(t, exists, "SetTenantBurst should auto-create unknown tenant")
+	assert.Equal(t, 1.0, tenant.Weight, "auto-created tenant must have default weight 1.0")
+}
+
+func TestSetTenantBurst_NilIsNoOp(t *testing.T) {
+	e := NewVFTEngine()
+	existing := burst.NewBurstBucket(10.0, 0.0)
+	e.SetTenantBurst("t1", existing)
+
+	e.SetTenantBurst("t1", nil) // must not clear the existing bucket
+
+	assert.Equal(t, existing, e.tenants["t1"].BurstBucket,
+		"nil should be a no-op; existing bucket must be preserved")
+}
+
+func TestSetTenantBurst_ReplacesBucket(t *testing.T) {
+	e := NewVFTEngine()
+	first := burst.NewBurstBucket(5.0, 0.0)
+	second := burst.NewBurstBucket(20.0, 0.0)
+
+	e.SetTenantBurst("t1", first)
+	e.SetTenantBurst("t1", second)
+
+	assert.Equal(t, second, e.tenants["t1"].BurstBucket, "second SetTenantBurst call should replace the first bucket")
+}
+
 // --- OnTaskDispatched ---
 
 func TestOnTaskDispatched_RemovesActiveWeight(t *testing.T) {
