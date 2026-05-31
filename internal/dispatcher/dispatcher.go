@@ -6,9 +6,9 @@ import (
 	"errors"
 	"sync"
 
-	"github.com/tayts/fairsched/internal/burst"
 	"github.com/tayts/fairsched/internal/engine"
 	"github.com/tayts/fairsched/internal/limiter"
+	"github.com/tayts/fairsched/internal/tenant"
 )
 
 var (
@@ -46,12 +46,18 @@ func (d *Dispatcher) Enqueue(task *engine.Task) error {
 		return ErrStopped
 	}
 
-	if err := d.limiter.TryAcquire(task.TenantId); err != nil {
+	if err := d.limiter.TryAcquire(task.TenantID); err != nil {
 		return err
 	}
 
-	// compute VFT for current task
-	task.VFT = d.vftEngine.ComputeVFT(task)
+	// Compute VFT for current task. Returns ErrTenantNotRegistered if the
+	// tenant has not been configured via RegisterTenant.
+	vft, err := d.vftEngine.ComputeVFT(task)
+	if err != nil {
+		d.limiter.Release(task.TenantID) // roll back the slot we just acquired
+		return err
+	}
+	task.VFT = vft
 
 	heap.Push(d.taskQueue, task)
 
@@ -109,7 +115,7 @@ func (d *Dispatcher) DequeueNonBlocking() (*engine.Task, error) {
 // Complete signals that the caller has finished executing the task.
 // Complete must be called exactly once per successfully dequeued task.
 func (d *Dispatcher) Complete(task *engine.Task) {
-	d.limiter.Release(task.TenantId)
+	d.limiter.Release(task.TenantID)
 }
 
 // Len returns number of pending tasks
@@ -127,15 +133,8 @@ func (d *Dispatcher) Stop() {
 	d.cond.Broadcast()
 }
 
-// AddTenant configures a tenant's scheduling parameters.
-func (d *Dispatcher) AddTenant(tenantId string, cfg TenantConfig) {
-	d.mu.Lock()
-	defer d.mu.Unlock()
-
-	d.vftEngine.SetTenantWeight(tenantId, orDefault(cfg.Weight, defaultWeight))
-	d.limiter.SetLimit(tenantId, orDefault(cfg.Limit, defaultLimit))
-
-	if cfg.BurstCapacity > 0 {
-		d.vftEngine.SetTenantBurst(tenantId, burst.NewBurstBucket(cfg.BurstCapacity, orDefault(cfg.BurstRate, defaultBurstRate)))
-	}
+// RegisterTenant configures a tenant's scheduling parameters.
+func (d *Dispatcher) RegisterTenant(t *tenant.Tenant) {
+	d.vftEngine.RegisterTenant(t)
+	d.limiter.SetLimit(t.ID, t.MaxConcurrency)
 }

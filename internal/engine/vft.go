@@ -1,23 +1,28 @@
 package engine
 
 import (
+	"errors"
 	"math"
 	"sync"
 
 	"github.com/tayts/fairsched/internal/burst"
+	"github.com/tayts/fairsched/internal/tenant"
 )
+
+// ErrTenantNotRegistered is returned by ComputeVFT when the task's tenant has
+// not been registered via RegisterTenant. Tasks for unknown tenants are rejected
+// to prevent them jumping to the front of the queue with VFT=0.
+var ErrTenantNotRegistered = errors.New("tenant not registered in engine")
 
 // burstFactor reduces the VFT advance for burst-absorbed tasks.
 // A value of 0.5 gives ~2x throughput during a burst window.
 // TODO: make this configurable per tenant.
 const burstFactor = 0.5
 
-const defaultTenantWeight float64 = 1.0
-
 // VFTEngine computes virtual finish times for tasks
 type VFTEngine struct {
 	vtTracker *VTTracker
-	tenants   map[string]*Tenant
+	tenants   map[string]*tenantState
 	mu        sync.RWMutex
 }
 
@@ -25,110 +30,98 @@ type VFTEngine struct {
 func NewVFTEngine() *VFTEngine {
 	return &VFTEngine{
 		vtTracker: NewVTTracker(),
-		tenants:   make(map[string]*Tenant),
+		tenants:   make(map[string]*tenantState),
 	}
 }
 
-// ComputeVFT calculates virtual finish time for a task
-// Formula: F_i = max(V(t), F_{i,prev}) + (cost_i / weight_i)
-func (e *VFTEngine) ComputeVFT(task *Task) float64 {
+// RegisterTenant registers a tenant with the engine.
+// If the tenant is already registered, its weight and burst config are updated.
+// Callers should call this before submitting tasks.
+// burstCapacity <= 0 disables burst for this tenant.
+func (e *VFTEngine) RegisterTenant(tenant *tenant.Tenant) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant := e.getOrCreateTenant(task.TenantId)
+	state, exists := e.tenants[tenant.ID]
+	if !exists {
+		state = &tenantState{weight: tenant.Weight}
+		e.tenants[tenant.ID] = state
+	}
+
+	if tenant.BurstCapacity > 0 {
+		if state.burstBucket == nil || state.burstBucket.Capacity != tenant.BurstCapacity || state.burstBucket.RefillRate != tenant.BurstRate {
+			state.burstBucket = burst.NewBurstBucket(tenant.BurstCapacity, tenant.BurstRate)
+		}
+	} else {
+		state.burstBucket = nil
+	}
+
+	// If the weight changed and tenant has pending tasks, adjust active weight.
+	if state.pendingTasks > 0 {
+		e.vtTracker.UpdateActiveWeight(tenant.Weight - state.weight)
+	}
+	state.weight = tenant.Weight
+}
+
+// ComputeVFT calculates virtual finish time for a task.
+// Formula: F_i = max(V(t), F_{i,prev}) + (cost_i / weight_i)
+// Returns (0.0, ErrTenantNotRegistered) if the tenant has not been registered via RegisterTenant.
+func (e *VFTEngine) ComputeVFT(task *Task) (float64, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	s, exists := e.tenants[task.TenantID]
+	if !exists {
+		return 0.0, ErrTenantNotRegistered
+	}
 
 	// Get current virtual time
 	vt := e.vtTracker.Get()
 
 	// Compute virtual start time
-	vst := math.Max(vt, tenant.LastVFT)
+	vst := math.Max(vt, s.lastVFT)
 
 	// Compute virtual finish time
 	var vft float64
 
 	// Try absorb burst cost
-	if tenant.BurstBucket != nil && tenant.BurstBucket.TryConsume(task.Cost) {
+	if s.burstBucket != nil && s.burstBucket.TryConsume(task.Cost) {
 		// absorb burst, reduce cost
-		vft = vst + (task.Cost/tenant.Weight)*burstFactor
+		vft = vst + (task.Cost/s.weight)*burstFactor
 	} else {
 		// normal cost
-		vft = vst + (task.Cost / tenant.Weight)
+		vft = vst + (task.Cost / s.weight)
 	}
 
 	// Update tenant state
-	tenant.LastVFT = vft
-	tenant.PendingTasks++
+	s.lastVFT = vft
+	s.pendingTasks++
 
 	// If this is the first task, add tenant weight to active weight
-	if tenant.PendingTasks == 1 {
-		e.vtTracker.UpdateActiveWeight(tenant.Weight)
+	if s.pendingTasks == 1 {
+		e.vtTracker.UpdateActiveWeight(s.weight)
 	}
 
-	return vft
+	return vft, nil
 }
 
-// OnTaskDispatched updates state when a task completes dispatch
+// OnTaskDispatched updates state when a task leaves the queue.
 func (e *VFTEngine) OnTaskDispatched(task *Task) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
 
-	tenant, exists := e.tenants[task.TenantId]
+	state, exists := e.tenants[task.TenantID]
 	if !exists {
 		return
 	}
 
-	if tenant.PendingTasks > 0 {
-		tenant.PendingTasks--
-		tenant.TotalDispatched++
+	if state.pendingTasks > 0 {
+		state.pendingTasks--
+		state.totalDispatched++
 
 		// if no more pending task, remove weight from active weight
-		if tenant.PendingTasks == 0 {
-			e.vtTracker.UpdateActiveWeight(-tenant.Weight)
+		if state.pendingTasks == 0 {
+			e.vtTracker.UpdateActiveWeight(-state.weight)
 		}
 	}
-}
-
-// SetTenantWeight updates a tenant's fairness weight
-func (e *VFTEngine) SetTenantWeight(tenantID string, weight float64) {
-	// clamp weight to [0.001, 1000]
-	weight = math.Max(0.001, math.Min(1000.0, weight))
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	tenant := e.getOrCreateTenant(tenantID)
-	if tenant.Weight == weight {
-		return
-	}
-
-	// if tenant has pending tasks, adjust active weight
-	if tenant.PendingTasks > 0 {
-		delta := weight - tenant.Weight
-		e.vtTracker.UpdateActiveWeight(delta)
-	}
-	tenant.Weight = weight
-}
-
-// SetTenantBurst sets the burst bucket for a tenant
-func (e *VFTEngine) SetTenantBurst(tenantId string, bucket *burst.BurstBucket) {
-	if bucket == nil {
-		return
-	}
-
-	e.mu.Lock()
-	defer e.mu.Unlock()
-
-	e.getOrCreateTenant(tenantId).BurstBucket = bucket
-}
-
-// getOrCreateTenant returns the tenant for the given ID, creating it with default
-// settings if it does not already exist.
-// Caller must hold the mutex lock.
-func (e *VFTEngine) getOrCreateTenant(id string) *Tenant {
-	tenant, exists := e.tenants[id]
-	if !exists {
-		tenant = &Tenant{Id: id, Weight: defaultTenantWeight}
-		e.tenants[id] = tenant
-	}
-	return tenant
 }
