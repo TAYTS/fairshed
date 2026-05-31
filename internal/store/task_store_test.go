@@ -9,8 +9,8 @@ import (
 )
 
 // newTask is a test helper to create a minimal engine.Task.
-func newTask(id, tenantId string) *engine.Task {
-	return &engine.Task{Id: id, TenantId: tenantId, Cost: 1.0}
+func newTask(id, tenantID string) *engine.Task {
+	return &engine.Task{ID: id, TenantID: tenantID, Cost: 1.0}
 }
 
 // ---- Create ----------------------------------------------------------------
@@ -175,7 +175,7 @@ func TestGetTask_Success(t *testing.T) {
 
 	record, err := s.GetTask("t1")
 	assert.NoError(t, err, "expect no error when getting an existing task")
-	assert.Equal(t, "t1", record.Task.Id, "expect task id to match")
+	assert.Equal(t, "t1", record.Task.ID, "expect task id to match")
 	assert.Equal(t, TaskStatusPending, record.Status, "expect status to be pending")
 }
 

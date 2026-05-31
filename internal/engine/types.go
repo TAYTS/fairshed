@@ -7,20 +7,20 @@ import (
 	"github.com/tayts/fairsched/internal/burst"
 )
 
-// Tenant represents a single tenant with its fairness properties
-type Tenant struct {
-	Id              string
-	Weight          float64 // Fairness weight (default 1.0, range 0.001 - 1000)
-	LastVFT         float64 // Last virtual finish time for this tenant
-	PendingTasks    int64   // Count of backlog tasks
-	TotalDispatched int64   // Lifetime dispatch count
-	BurstBucket     *burst.BurstBucket
+// tenantState holds engine-internal scheduling state for a single tenant.
+// This is not the domain Tenant — see internal/tenant for the canonical config.
+type tenantState struct {
+	weight          float64            // fairness weight; mirrors tenant.Tenant.Weight
+	lastVFT         float64            // last computed virtual finish time
+	pendingTasks    int64              // count of tasks in the queue for this tenant
+	totalDispatched int64              // lifetime dispatch count
+	burstBucket     *burst.BurstBucket // nil if burst is disabled
 }
 
 // Task represents a dispatchable unit of work
 type Task struct {
-	Id       string
-	TenantId string
+	ID       string
+	TenantID string
 	Cost     float64        // Task cost (default 1.0)
 	VFT      float64        // Computed virtual finish time
 	Arrived  time.Time      // Arrival timestamp

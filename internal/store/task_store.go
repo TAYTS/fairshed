@@ -49,8 +49,8 @@ func (s *TaskStore) Create(task *engine.Task) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	if _, ok := s.records[task.Id]; ok {
-		return fmt.Errorf("task %s: %w", task.Id, ErrDuplicateTask)
+	if _, ok := s.records[task.ID]; ok {
+		return fmt.Errorf("task %s: %w", task.ID, ErrDuplicateTask)
 	}
 
 	now := time.Now()
@@ -59,7 +59,7 @@ func (s *TaskStore) Create(task *engine.Task) error {
 		Status:     TaskStatusPending,
 		EnqueuedAt: now,
 	}
-	s.records[task.Id] = record
+	s.records[task.ID] = record
 	return nil
 }
 
@@ -140,7 +140,7 @@ func (s *TaskStore) GetWorkerDurationByTenant() map[string]time.Duration {
 	workerDurations := make(map[string]time.Duration)
 	for _, record := range s.records {
 		if record.Status == TaskStatusCompleted || record.Status == TaskStatusFailed {
-			workerDurations[record.Task.TenantId] += record.CompletedAt.Sub(*record.DispatchedAt)
+			workerDurations[record.Task.TenantID] += record.CompletedAt.Sub(*record.DispatchedAt)
 		}
 	}
 	return workerDurations
