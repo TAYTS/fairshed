@@ -22,10 +22,16 @@ func NewConcurrencyLimiter() *ConcurrencyLimiter {
 }
 
 // SetLimit set/override the concurrency limit of a tenant.
+// If limit <= 0, remove the limit.
 func (cl *ConcurrencyLimiter) SetLimit(tenantID string, limit int) {
 	cl.mu.Lock()
 	defer cl.mu.Unlock()
-	cl.limits[tenantID] = limit
+
+	if limit <= 0 {
+		delete(cl.limits, tenantID)
+	} else {
+		cl.limits[tenantID] = limit
+	}
 }
 
 // TryAcquire increase the concurrency counter of the tenant if exist.
@@ -56,4 +62,9 @@ func (cl *ConcurrencyLimiter) Release(tenantID string) {
 		return
 	}
 	cl.current[tenantID]--
+	if cl.current[tenantID] == 0 {
+		if _, hasLimit := cl.limits[tenantID]; !hasLimit {
+			delete(cl.current, tenantID)
+		}
+	}
 }

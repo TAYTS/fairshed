@@ -80,6 +80,25 @@ func TestRelease_Underflow_IsNoOp(t *testing.T) {
 		"underflow releases must not inflate available slots")
 }
 
+func TestRelease_LazyDeletesCurrentEntry(t *testing.T) {
+	cl := NewConcurrencyLimiter()
+	cl.SetLimit("t1", 2)
+
+	assert.NoError(t, cl.TryAcquire("t1"))
+	assert.NoError(t, cl.TryAcquire("t1"))
+
+	// Remove limit while tasks are in-flight — counter must survive.
+	cl.SetLimit("t1", 0)
+	_, exists := cl.current["t1"]
+	assert.True(t, exists, "current entry must survive SetLimit(0) while tasks are in-flight")
+
+	// Release all in-flight tasks — entry lazily removed once count hits 0.
+	cl.Release("t1")
+	cl.Release("t1")
+	_, exists = cl.current["t1"]
+	assert.False(t, exists, "current entry should be removed once count hits 0 with no limit")
+}
+
 func TestRelease_UnknownTenant_IsNoOp(t *testing.T) {
 	cl := NewConcurrencyLimiter()
 
@@ -90,6 +109,78 @@ func TestRelease_UnknownTenant_IsNoOp(t *testing.T) {
 }
 
 // --- SetLimit ---
+
+func TestSetLimit_ZeroRemovesLimit(t *testing.T) {
+	cl := NewConcurrencyLimiter()
+	cl.SetLimit("t1", 2)
+
+	assert.NoError(t, cl.TryAcquire("t1"))
+	assert.NoError(t, cl.TryAcquire("t1"))
+	assert.ErrorIs(t, cl.TryAcquire("t1"), ErrLimitExceeded)
+
+	// Remove the limit — tenant becomes unlimited.
+	cl.SetLimit("t1", 0)
+	for range 100 {
+		assert.NoError(t, cl.TryAcquire("t1"), "tenant with no limit should never be rejected")
+	}
+}
+
+func TestSetLimit_LowerLimit_BackpressureUntilDrained(t *testing.T) {
+	cl := NewConcurrencyLimiter()
+	cl.SetLimit("t1", 5)
+	for range 5 {
+		assert.NoError(t, cl.TryAcquire("t1"))
+	}
+
+	// Lower to 2 while 5 tasks are in-flight — no clamping; counter stays at 5.
+	cl.SetLimit("t1", 2)
+
+	// No new tasks accepted until the real in-flight count drops below the new limit.
+	assert.ErrorIs(t, cl.TryAcquire("t1"), ErrLimitExceeded,
+		"5 in-flight against limit 2: no slots available immediately")
+
+	// Release 3: current 5->4->3->2 — still at the limit.
+	cl.Release("t1")
+	cl.Release("t1")
+	cl.Release("t1")
+	assert.ErrorIs(t, cl.TryAcquire("t1"), ErrLimitExceeded,
+		"current=2 equals the limit; still blocked")
+
+	// One more release: current 2->1 — slot opens.
+	cl.Release("t1")
+	assert.NoError(t, cl.TryAcquire("t1"), "slot opens once count drops below the new limit")
+}
+
+func TestSetLimit_Cycle_RemoveAndReapply(t *testing.T) {
+	cl := NewConcurrencyLimiter()
+	cl.SetLimit("t1", 5)
+	for range 3 {
+		assert.NoError(t, cl.TryAcquire("t1"))
+	}
+
+	// Remove the limit — in-flight counter must be preserved (not deleted).
+	cl.SetLimit("t1", 0)
+	assert.Equal(t, 3, cl.current["t1"], "in-flight count must survive SetLimit(0)")
+
+	// Acquire 4 more while unlimited — counter accurately reflects all 7 in-flight.
+	for range 4 {
+		assert.NoError(t, cl.TryAcquire("t1"))
+	}
+	assert.Equal(t, 7, cl.current["t1"])
+
+	// Re-enable with limit 3; 7 in-flight exceeds it — backpressure applies immediately.
+	cl.SetLimit("t1", 3)
+	assert.ErrorIs(t, cl.TryAcquire("t1"), ErrLimitExceeded,
+		"7 in-flight against re-enabled limit of 3: blocked")
+
+	// Release until count drops below 3: 7→6→5→4→3 still blocked, 3→2 opens a slot.
+	for range 4 {
+		cl.Release("t1")
+	}
+	assert.ErrorIs(t, cl.TryAcquire("t1"), ErrLimitExceeded, "current=3 equals limit; still blocked")
+	cl.Release("t1")
+	assert.NoError(t, cl.TryAcquire("t1"), "slot opens once count drops below re-enabled limit")
+}
 
 func TestSetLimit_UpdatesExistingLimit(t *testing.T) {
 	cl := NewConcurrencyLimiter()
