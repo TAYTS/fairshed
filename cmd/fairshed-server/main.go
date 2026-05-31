@@ -81,7 +81,7 @@ func submitTask(disp *dispatcher.Dispatcher) http.HandlerFunc {
 		}
 
 		task := &engine.Task{
-			TenantId: req.TenantId,
+			TenantID: req.TenantId,
 			Cost:     req.Cost,
 		}
 
