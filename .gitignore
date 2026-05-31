@@ -39,3 +39,4 @@ coverage.out
 # IDE
 .vscode/
 *.code-workspace
+.agents/
