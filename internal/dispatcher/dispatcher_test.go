@@ -384,6 +384,80 @@ func TestRegisterTenant_BurstReducesVFT(t *testing.T) {
 	assert.Less(t, task.VFT, 4.0, "burst should reduce VFT below the non-burst cost/weight")
 }
 
+// --- ReEnqueue ---
+
+func TestReEnqueue_TaskReturnsToQueue(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: tenant.DefaultConcurrency})
+
+	task := newTask("t1", 1.0)
+	assert.NoError(t, d.Enqueue(task))
+
+	dequeued, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+	assert.Equal(t, 0, d.Len())
+
+	assert.NoError(t, d.ReEnqueue(dequeued))
+	assert.Equal(t, 1, d.Len(), "task must be back in queue after ReEnqueue")
+
+	redequeued, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+	assert.Equal(t, dequeued.TenantID, redequeued.TenantID)
+}
+
+func TestReEnqueue_SlotCarriesOver(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	// limit=1: only one slot available for this tenant
+	d.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: 1})
+
+	task := newTask("t1", 1.0)
+	assert.NoError(t, d.Enqueue(task))
+
+	dequeued, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+
+	// ReEnqueue must succeed even though the slot is still held — it carries
+	// over the existing slot rather than calling TryAcquire again.
+	// If it did TryAcquire, it would hit limit=1 and return ErrLimitExceeded.
+	assert.NoError(t, d.ReEnqueue(dequeued), "ReEnqueue must not re-acquire the slot")
+
+	// Slot is still held: a fresh Enqueue must be rejected
+	assert.ErrorIs(t, d.Enqueue(newTask("t1", 1.0)), limiter.ErrLimitExceeded,
+		"slot must still be held while task is back in queue")
+
+	// Dequeue and complete: slot is released
+	task2, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+	d.Complete(task2)
+
+	// Slot is now free
+	assert.NoError(t, d.Enqueue(newTask("t1", 1.0)),
+		"slot must be free after completing the re-enqueued task")
+}
+
+func TestReEnqueue_StoppedReleasesSlot(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: 1})
+
+	task := newTask("t1", 1.0)
+	assert.NoError(t, d.Enqueue(task))
+
+	dequeued, err := d.DequeueNonBlocking()
+	assert.NoError(t, err)
+
+	d.Stop()
+
+	// ReEnqueue on a stopped dispatcher must return ErrStopped and release the
+	// held slot so it is not leaked. We verify the release by spinning up a
+	// fresh dispatcher sharing the same limiter and confirming the slot is free.
+	err = d.ReEnqueue(dequeued)
+	assert.ErrorIs(t, err, ErrStopped)
+
+	// Slot released: a new acquire on the same limiter must succeed.
+	assert.NoError(t, d.limiter.TryAcquire("t1"),
+		"slot must be released when ReEnqueue is called on a stopped dispatcher")
+}
+
 // --- Complete ---
 
 func TestComplete_ReleasesSlot(t *testing.T) {

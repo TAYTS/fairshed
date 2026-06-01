@@ -37,7 +37,10 @@ func NewDispatcher(vftEngine *engine.VFTEngine) *Dispatcher {
 	return d
 }
 
-// Enqueue adds a task to the dispatch queue
+// Enqueue adds a task to the dispatch queue.
+// Returns ErrStopped if the dispatcher has been stopped,
+// ErrLimitExceeded if the tenant's concurrency limit is reached,
+// ErrTenantNotRegistered if the tenant has not been configured via RegisterTenant.
 func (d *Dispatcher) Enqueue(task *engine.Task) error {
 	d.mu.Lock()
 	defer d.mu.Unlock()
@@ -50,11 +53,42 @@ func (d *Dispatcher) Enqueue(task *engine.Task) error {
 		return err
 	}
 
+	if err := d.push(task); err != nil {
+		d.limiter.Release(task.TenantID) // roll back the slot we just acquired
+		return err
+	}
+
+	return nil
+}
+
+// ReEnqueue puts a dequeued task back into the queue after a failed dispatch.
+// Unlike Enqueue, it does not acquire a new concurrency slot — the slot from
+// the original Enqueue is still held and carries over.
+// ReEnqueue must be called at most once per dequeued task.
+func (d *Dispatcher) ReEnqueue(task *engine.Task) error {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	if d.stopped {
+		d.limiter.Release(task.TenantID) // can't re-enqueue; release the slot to avoid leaking it
+		return ErrStopped
+	}
+
+	if err := d.push(task); err != nil {
+		d.limiter.Release(task.TenantID) // roll back the slot acquired in Enqueue
+		return err
+	}
+
+	return nil
+}
+
+// push computes a fresh VFT for the task and pushes it onto the heap.
+// Caller must hold the lock.
+func (d *Dispatcher) push(task *engine.Task) error {
 	// Compute VFT for current task. Returns ErrTenantNotRegistered if the
 	// tenant has not been configured via RegisterTenant.
 	vft, err := d.vftEngine.ComputeVFT(task)
 	if err != nil {
-		d.limiter.Release(task.TenantID) // roll back the slot we just acquired
 		return err
 	}
 	task.VFT = vft
