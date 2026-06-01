@@ -1,0 +1,44 @@
+syntax = "proto3";
+package worker.v1;
+
+option go_package = "github.com/tayts/fairsched/gen/worker/v1;workerv1";
+
+service WorkerService {
+  // PollTask is a server-streaming RPC.
+  // Worker sends one request, server streams tasks back as they become available.
+  // When the worker disconnects, the server re-enqueues any unacknowledged tasks.
+  rpc PollTask(PollTaskRequest) returns (stream PollTaskResponse);
+
+  // CompleteTask signals a task finished successfully.
+  rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);
+
+  // FailTask signals a task failed, with optional retry.
+  rpc FailTask(FailTaskRequest) returns (FailTaskResponse);
+}
+
+message PollTaskRequest {
+  string worker_id = 1;
+  string tenant_id = 2; // worker polls for a specific tenant
+}
+
+message PollTaskResponse {
+  string task_id = 1;
+  string tenant_id = 2;
+  string task_type = 3;
+  double cost = 4;
+  string payload = 5;
+}
+
+message CompleteTaskRequest {
+  string task_id = 1;
+  string worker_id = 2;
+}
+message CompleteTaskResponse {}
+
+message FailTaskRequest {
+  string task_id = 1;
+  string worker_id = 2;
+  string error = 3;
+  bool retry = 4;
+}
+message FailTaskResponse {}

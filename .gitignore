@@ -28,6 +28,9 @@ coverage.out
 /bin/
 /dist/
 
+# Proto output
+/gen/
+
 # Documentation
 /docs/
 *.local.md
