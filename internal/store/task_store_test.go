@@ -49,7 +49,7 @@ func TestMarkDispatched_Success(t *testing.T) {
 
 	r := s.records["t1"]
 	assert.Equal(t, TaskStatusDispatched, r.Status, "expect status to be dispatched")
-	assert.Equal(t, "worker-1", r.WorkerId, "expect WorkerId to be set")
+	assert.Equal(t, "worker-1", r.WorkerID, "expect WorkerID to be set")
 	assert.NotNil(t, r.DispatchedAt, "expect DispatchedAt to be set")
 }
 

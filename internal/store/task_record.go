@@ -23,6 +23,6 @@ type TaskRecord struct {
 	EnqueuedAt   time.Time
 	DispatchedAt *time.Time
 	CompletedAt  *time.Time
-	WorkerId     string
+	WorkerID     string
 	Error        string
 }

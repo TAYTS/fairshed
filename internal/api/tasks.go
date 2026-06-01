@@ -134,7 +134,7 @@ func (h *TaskHandler) getTaskStatus(w http.ResponseWriter, r *http.Request) {
 		EnqueuedAt:   record.EnqueuedAt,
 		DispatchedAt: record.DispatchedAt,
 		CompletedAt:  record.CompletedAt,
-		WorkerID:     record.WorkerId,
+		WorkerID:     record.WorkerID,
 		Error:        record.Error,
 	})
 }

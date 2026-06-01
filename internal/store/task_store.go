@@ -32,13 +32,13 @@ func NewTaskStore() *TaskStore {
 
 // GetTask retrieves task by task id.
 // Returns error if task is not found
-func (s *TaskStore) GetTask(taskId string) (*TaskRecord, error) {
+func (s *TaskStore) GetTask(taskID string) (*TaskRecord, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	record, ok := s.records[taskId]
+	record, ok := s.records[taskID]
 	if !ok {
-		return nil, fmt.Errorf("task %s: %w", taskId, ErrTaskNotFound)
+		return nil, fmt.Errorf("task %s: %w", taskID, ErrTaskNotFound)
 	}
 	return record, nil
 }
@@ -65,40 +65,40 @@ func (s *TaskStore) Create(task *engine.Task) error {
 
 // MarkDispatched marks a task as dispatched.
 // Return error if task not found or task has dispatched.
-func (s *TaskStore) MarkDispatched(taskId, workerId string) error {
+func (s *TaskStore) MarkDispatched(taskID, workerID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, ok := s.records[taskId]
+	record, ok := s.records[taskID]
 	if !ok {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskNotFound)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskNotFound)
 	}
-	if record.DispatchedAt != nil || record.WorkerId != "" || record.Status != TaskStatusPending {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskHasDispatched)
+	if record.DispatchedAt != nil || record.WorkerID != "" || record.Status != TaskStatusPending {
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskHasDispatched)
 	}
 
 	now := time.Now()
 	record.Status = TaskStatusDispatched
 	record.DispatchedAt = &now
-	record.WorkerId = workerId
+	record.WorkerID = workerID
 	return nil
 }
 
 // MarkCompleted marks a dispatched task as completed.
 // Returns error if task not found or task has not dispatched.
-func (s *TaskStore) MarkCompleted(taskId string) error {
+func (s *TaskStore) MarkCompleted(taskID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, ok := s.records[taskId]
+	record, ok := s.records[taskID]
 	if !ok {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskNotFound)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskNotFound)
 	}
 	if record.Status == TaskStatusCompleted || record.Status == TaskStatusFailed {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskAlreadyTerminated)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskAlreadyTerminated)
 	}
 	if record.Status == TaskStatusPending {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskNotDispatched)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskNotDispatched)
 	}
 
 	now := time.Now()
@@ -109,19 +109,19 @@ func (s *TaskStore) MarkCompleted(taskId string) error {
 
 // MarkFailed marks a dispatched task as failed.
 // Returns error if task not found or task has not dispatched.
-func (s *TaskStore) MarkFailed(taskId, errMsg string) error {
+func (s *TaskStore) MarkFailed(taskID, errMsg string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
-	record, ok := s.records[taskId]
+	record, ok := s.records[taskID]
 	if !ok {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskNotFound)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskNotFound)
 	}
 	if record.Status == TaskStatusCompleted || record.Status == TaskStatusFailed {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskAlreadyTerminated)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskAlreadyTerminated)
 	}
 	if record.Status == TaskStatusPending {
-		return fmt.Errorf("task %s: %w", taskId, ErrTaskNotDispatched)
+		return fmt.Errorf("task %s: %w", taskID, ErrTaskNotDispatched)
 	}
 
 	now := time.Now()
