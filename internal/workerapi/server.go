@@ -74,31 +74,31 @@ func (s *WorkerServer) PollTask(req *workerv1.PollTaskRequest, stream grpc.Serve
 }
 
 // CompleteTask implements [workerv1.WorkerServiceServer].
-func (w *WorkerServer) CompleteTask(ctx context.Context, req *workerv1.CompleteTaskRequest) (*workerv1.CompleteTaskResponse, error) {
-	record, err := w.store.GetTask(req.TaskId)
+func (s *WorkerServer) CompleteTask(ctx context.Context, req *workerv1.CompleteTaskRequest) (*workerv1.CompleteTaskResponse, error) {
+	record, err := s.store.GetTask(req.TaskId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "task not found: %s", req.TaskId)
 	}
 
-	if err := w.store.MarkCompleted(req.TaskId); err != nil {
+	if err := s.store.MarkCompleted(req.TaskId); err != nil {
 		log.Printf("failed to complete task %s: %v", req.TaskId, err)
 		return nil, status.Errorf(codes.InvalidArgument, "task %s has invalid state: %v", req.TaskId, err)
 	}
-	w.dispatcher.Complete(record.Task)
+	s.dispatcher.Complete(record.Task)
 	return &workerv1.CompleteTaskResponse{}, nil
 }
 
 // FailTask implements [workerv1.WorkerServiceServer].
-func (w *WorkerServer) FailTask(ctx context.Context, req *workerv1.FailTaskRequest) (*workerv1.FailTaskResponse, error) {
-	record, err := w.store.GetTask(req.TaskId)
+func (s *WorkerServer) FailTask(ctx context.Context, req *workerv1.FailTaskRequest) (*workerv1.FailTaskResponse, error) {
+	record, err := s.store.GetTask(req.TaskId)
 	if err != nil {
 		return nil, status.Errorf(codes.NotFound, "task not found: %s", req.TaskId)
 	}
 
-	if err := w.store.MarkFailed(req.TaskId, req.Error); err != nil {
+	if err := s.store.MarkFailed(req.TaskId, req.Error); err != nil {
 		log.Printf("failed to fail task %s: %v", req.TaskId, err)
 		return nil, status.Errorf(codes.InvalidArgument, "task %s has invalid state: %v", req.TaskId, err)
 	}
-	w.dispatcher.Complete(record.Task)
+	s.dispatcher.Complete(record.Task)
 	return &workerv1.FailTaskResponse{}, nil
 }
