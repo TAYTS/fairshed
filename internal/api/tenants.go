@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"strings"
 
 	"github.com/tayts/fairsched/internal/dispatcher"
 	"github.com/tayts/fairsched/internal/tenant"
@@ -63,7 +64,8 @@ func (h *TenantHandler) registerTenant(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.ID == "" {
+	tenantID := strings.TrimSpace(req.ID)
+	if tenantID == "" {
 		writeError(w, http.StatusBadRequest, "id is required")
 		return
 	}
@@ -143,13 +145,13 @@ func (h *TenantHandler) patchTenantWeight(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Propagate the updated weight to the VFT engine and limiter.
 	updated, err := h.registry.Get(id)
 	if err != nil {
 		writeError(w, http.StatusInternalServerError, "failed to read tenant after update")
 		return
 	}
 
+	// Propagate the updated weight to the VFT engine and limiter.
 	h.dispatcher.RegisterTenant(updated)
 
 	writeJSON(w, http.StatusOK, tenantToResponse(updated))
