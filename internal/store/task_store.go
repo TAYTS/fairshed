@@ -131,17 +131,35 @@ func (s *TaskStore) MarkFailed(taskID, errMsg string) error {
 	return nil
 }
 
-// GetWorkerDurationByTenant returns the total worker duration consumed per tenant for
-// tasks that have completed or failed.
-func (s *TaskStore) GetWorkerDurationByTenant() map[string]time.Duration {
+// TenantStoreStats is a per-tenant snapshot collected in a single read pass.
+type TenantStoreStats struct {
+	PendingCount    int     // tasks in queue, not yet dispatched to a worker
+	ActiveCount     int     // tasks currently dispatched to a worker
+	DispatchedTotal int64   // lifetime count of tasks that have ever been dispatched
+	WorkerSeconds   float64 // total CPU-seconds consumed by completed + failed tasks
+}
+
+// TenantStats returns a consistent, single-lock snapshot of per-tenant store
+// state used by the stats endpoint.
+func (s *TaskStore) TenantStats() map[string]TenantStoreStats {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	workerDurations := make(map[string]time.Duration)
+	stats := make(map[string]TenantStoreStats)
 	for _, record := range s.records {
-		if record.Status == TaskStatusCompleted || record.Status == TaskStatusFailed {
-			workerDurations[record.Task.TenantID] += record.CompletedAt.Sub(*record.DispatchedAt)
+		tenantID := record.Task.TenantID
+		st := stats[tenantID]
+		switch record.Status {
+		case TaskStatusPending:
+			st.PendingCount++
+		case TaskStatusDispatched:
+			st.ActiveCount++
+			st.DispatchedTotal++
+		case TaskStatusCompleted, TaskStatusFailed:
+			st.DispatchedTotal++
+			st.WorkerSeconds += record.CompletedAt.Sub(*record.DispatchedAt).Seconds()
 		}
+		stats[tenantID] = st
 	}
-	return workerDurations
+	return stats
 }

@@ -185,26 +185,38 @@ func TestGetTask_NotFound(t *testing.T) {
 	assert.ErrorIs(t, err, ErrTaskNotFound, "expect ErrTaskNotFound for unknown task")
 }
 
-// ---- GetWorkerDurationByTenant ---------------------------------------------
+// ---- TenantStats -----------------------------------------------------------
 
-func TestGetWorkerDurationByTenant_Empty(t *testing.T) {
+func TestTenantStats_Empty(t *testing.T) {
 	s := NewTaskStore()
-	result := s.GetWorkerDurationByTenant()
-	assert.Empty(t, result, "expect empty map when no tasks exist")
+	assert.Empty(t, s.TenantStats(), "expect empty map when no tasks exist")
 }
 
-func TestGetWorkerDurationByTenant_IgnoresPendingAndDispatched(t *testing.T) {
+func TestTenantStats_PendingTasksNotCounted(t *testing.T) {
+	s := NewTaskStore()
+	_ = s.Create(newTask("t1", "ash"))
+
+	stats := s.TenantStats()
+	// Pending tasks don't contribute to either field.
+	assert.Zero(t, stats["ash"].ActiveCount, "pending task must not increment ActiveCount")
+	assert.Zero(t, stats["ash"].WorkerSeconds, "pending task must not contribute WorkerSeconds")
+}
+
+func TestTenantStats_ActiveCount(t *testing.T) {
 	s := NewTaskStore()
 	_ = s.Create(newTask("t1", "ash"))
 	_ = s.Create(newTask("t2", "ash"))
-	_ = s.MarkDispatched("t2", "worker-1")
-	// t1 is pending, t2 is dispatched — neither should contribute
+	_ = s.Create(newTask("t3", "misty"))
+	_ = s.MarkDispatched("t1", "worker-1")
+	_ = s.MarkDispatched("t2", "worker-2")
+	_ = s.MarkDispatched("t3", "worker-1")
 
-	result := s.GetWorkerDurationByTenant()
-	assert.Empty(t, result, "expect empty map when no tasks are completed or failed")
+	stats := s.TenantStats()
+	assert.Equal(t, 2, stats["ash"].ActiveCount, "two dispatched tasks for 'ash'")
+	assert.Equal(t, 1, stats["misty"].ActiveCount, "one dispatched task for 'misty'")
 }
 
-func TestGetWorkerDurationByTenant_AccumulatesCompletedByTenant(t *testing.T) {
+func TestTenantStats_WorkerSeconds_AccumulatesCompletedTasks(t *testing.T) {
 	s := NewTaskStore()
 	_ = s.Create(newTask("t1", "ash"))
 	_ = s.Create(newTask("t2", "ash"))
@@ -216,29 +228,35 @@ func TestGetWorkerDurationByTenant_AccumulatesCompletedByTenant(t *testing.T) {
 	_ = s.MarkCompleted("t2")
 	_ = s.MarkCompleted("t3")
 
-	result := s.GetWorkerDurationByTenant()
-
-	assert.Contains(t, result, "ash", "expect entry for tenant 'ash'")
-	assert.Contains(t, result, "misty", "expect entry for tenant 'misty'")
-	// two tasks from "ash" — duration must be positive
-	assert.Positive(t, result["ash"], "expect positive duration for 'ash'")
-	assert.Positive(t, result["misty"], "expect positive duration for 'misty'")
+	stats := s.TenantStats()
+	assert.Positive(t, stats["ash"].WorkerSeconds, "expect positive worker-seconds for 'ash'")
+	assert.Positive(t, stats["misty"].WorkerSeconds, "expect positive worker-seconds for 'misty'")
 }
 
-func TestGetWorkerDurationByTenant_IncludesFailedTasks(t *testing.T) {
+func TestTenantStats_WorkerSeconds_IncludesFailedTasks(t *testing.T) {
 	s := NewTaskStore()
 	_ = s.Create(newTask("t1", "ash"))
 	_ = s.MarkDispatched("t1", "worker-1")
 	_ = s.MarkFailed("t1", "timeout")
 
-	result := s.GetWorkerDurationByTenant()
-	assert.Contains(t, result, "ash", "expect failed task to contribute to tenant duration")
-	assert.Positive(t, result["ash"], "expect positive duration for 'ash'")
+	stats := s.TenantStats()
+	assert.Positive(t, stats["ash"].WorkerSeconds, "failed task must contribute to WorkerSeconds")
 }
 
-func TestGetWorkerDurationByTenant_KeyedByTenantNotWorker(t *testing.T) {
+func TestTenantStats_CompletedTaskNotActive(t *testing.T) {
 	s := NewTaskStore()
-	// Two tasks for the same tenant, dispatched by different workers
+	_ = s.Create(newTask("t1", "ash"))
+	_ = s.MarkDispatched("t1", "worker-1")
+	_ = s.MarkCompleted("t1")
+
+	stats := s.TenantStats()
+	assert.Zero(t, stats["ash"].ActiveCount, "completed task must not count as active")
+	assert.Positive(t, stats["ash"].WorkerSeconds)
+}
+
+func TestTenantStats_KeyedByTenantNotWorker(t *testing.T) {
+	s := NewTaskStore()
+	// Two tasks for the same tenant dispatched by different workers.
 	_ = s.Create(newTask("t1", "ash"))
 	_ = s.Create(newTask("t2", "ash"))
 	_ = s.MarkDispatched("t1", "worker-1")
@@ -246,11 +264,9 @@ func TestGetWorkerDurationByTenant_KeyedByTenantNotWorker(t *testing.T) {
 	_ = s.MarkCompleted("t1")
 	_ = s.MarkCompleted("t2")
 
-	result := s.GetWorkerDurationByTenant()
-
-	// Must have exactly one key ("ash"), not two ("worker-1", "worker-2")
-	assert.Len(t, result, 1, "expect exactly 1 tenant entry, not one per worker")
-	assert.Contains(t, result, "ash", "expect key to be tenant id 'ash', not worker id")
+	stats := s.TenantStats()
+	assert.Len(t, stats, 1, "expect one entry keyed by tenant, not one per worker")
+	assert.Contains(t, stats, "ash")
 }
 
 // ---- Concurrency -----------------------------------------------------------
