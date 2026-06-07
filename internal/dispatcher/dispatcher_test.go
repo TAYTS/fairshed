@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tayts/fairsched/internal/engine"
 	"github.com/tayts/fairsched/internal/limiter"
 	"github.com/tayts/fairsched/internal/tenant"
@@ -485,6 +486,39 @@ func TestComplete_DoesNotPanicOnUnknownTenant(t *testing.T) {
 	assert.NotPanics(t, func() {
 		d.Complete(&engine.Task{TenantID: "ghost"})
 	})
+}
+
+// --- Stats ---
+
+func TestStats_NoTenants(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	stats := d.Stats()
+	assert.Empty(t, stats.Tenants)
+	assert.Equal(t, 0.0, stats.VirtualTime)
+}
+
+func TestStats_ReflectsRegisteredTenant(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 2.0, MaxConcurrency: tenant.DefaultConcurrency})
+
+	stats := d.Stats()
+
+	require.Len(t, stats.Tenants, 1)
+	assert.Equal(t, "t1", stats.Tenants[0].TenantID)
+	assert.Equal(t, 2.0, stats.Tenants[0].Weight)
+}
+
+func TestStats_LastVFTUpdatesAfterEnqueue(t *testing.T) {
+	d := NewDispatcher(engine.NewVFTEngine())
+	d.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: tenant.DefaultConcurrency})
+
+	task := newTask("t1", 3.0)
+	require.NoError(t, d.Enqueue(task))
+
+	stats := d.Stats()
+
+	require.Len(t, stats.Tenants, 1)
+	assert.Equal(t, task.VFT, stats.Tenants[0].LastVFT)
 }
 
 // --- Benchmarks ---

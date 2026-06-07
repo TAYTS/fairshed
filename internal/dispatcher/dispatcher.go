@@ -172,3 +172,8 @@ func (d *Dispatcher) RegisterTenant(t *tenant.Tenant) {
 	d.vftEngine.RegisterTenant(t)
 	d.limiter.SetLimit(t.ID, t.MaxConcurrency)
 }
+
+// Stats returns a snapshot of the engine's scheduling state.
+func (d *Dispatcher) Stats() engine.EngineStats {
+	return d.vftEngine.Stats()
+}
