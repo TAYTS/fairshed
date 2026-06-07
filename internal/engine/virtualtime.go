@@ -60,3 +60,24 @@ func (vt *VTTracker) UpdateActiveWeight(delta float64) {
 func (vt *VTTracker) Get() float64 {
 	return vt.Advance()
 }
+
+// VTSnapshot is a consistent point-in-time view of virtual time state.
+type VTSnapshot struct {
+	Current      float64
+	ActiveWeight float64
+}
+
+// Snapshot returns the last-committed values of Current and ActiveWeight
+// without advancing virtual time. The value of Current reflects the state
+// as of the most recent ComputeVFT call; it may lag real time if no tasks
+// have been enqueued recently, which is an accurate description of the
+// engine's state and safe for observability use.
+func (vt *VTTracker) Snapshot() VTSnapshot {
+	vt.mu.RLock()
+	defer vt.mu.RUnlock()
+
+	return VTSnapshot{
+		Current:      vt.vt.Current,
+		ActiveWeight: vt.vt.ActiveWeight,
+	}
+}

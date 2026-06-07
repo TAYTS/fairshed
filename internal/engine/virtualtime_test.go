@@ -237,6 +237,48 @@ func TestMonotonicAdvance(t *testing.T) {
 	}
 }
 
+// --- Snapshot ---
+
+func TestSnapshot_InitialValuesAreZero(t *testing.T) {
+	tracker := NewVTTracker()
+	snap := tracker.Snapshot()
+	assert.Equal(t, 0.0, snap.Current)
+	assert.Equal(t, 0.0, snap.ActiveWeight)
+}
+
+func TestSnapshot_ReflectsCommittedValues(t *testing.T) {
+	tracker := NewVTTracker()
+	tracker.UpdateActiveWeight(3.0)
+	committed := tracker.Advance()
+
+	snap := tracker.Snapshot()
+	assert.Equal(t, committed, snap.Current)
+	assert.Equal(t, 3.0, snap.ActiveWeight)
+}
+
+func TestSnapshot_DoesNotAdvanceVirtualTime(t *testing.T) {
+	tracker := NewVTTracker()
+	tracker.UpdateActiveWeight(1.0)
+	committed := tracker.Advance()
+
+	time.Sleep(20 * time.Millisecond)
+	snap := tracker.Snapshot()
+
+	// Snapshot must return the last committed value, not advance VT.
+	assert.Equal(t, committed, snap.Current, "Snapshot must not advance virtual time")
+
+	// A subsequent Advance must show that the elapsed time was preserved.
+	assert.Greater(t, tracker.Advance(), snap.Current, "Advance after Snapshot must reflect elapsed time")
+}
+
+func TestSnapshot_ZeroActiveWeightNeverAdvances(t *testing.T) {
+	tracker := NewVTTracker()
+	// No active weight: VT is frozen regardless of elapsed time.
+	time.Sleep(20 * time.Millisecond)
+	snap := tracker.Snapshot()
+	assert.Equal(t, 0.0, snap.Current)
+}
+
 // --- Benchmark ---
 
 func BenchmarkAdvance(b *testing.B) {
