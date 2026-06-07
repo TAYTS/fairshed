@@ -125,3 +125,37 @@ func (e *VFTEngine) OnTaskDispatched(task *Task) {
 		}
 	}
 }
+
+// EngineStats is a snapshot of the VFTEngine's scheduling state.
+type EngineStats struct {
+	VirtualTime float64       // Current global virtual time V(t)
+	Tenants     []TenantStats // Per-tenant snapshot, sorted by TenantID
+}
+
+// TenantStats is a snapshot of a single tenant's scheduling state.
+type TenantStats struct {
+	TenantID string
+	Weight   float64
+	LastVFT  float64
+}
+
+// Stats returns a consistent point-in-time snapshot of the engine's scheduling state.
+// Safe to call concurrently with ComputeVFT and OnTaskDispatched.
+func (e *VFTEngine) Stats() EngineStats {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	tenants := make([]TenantStats, 0, len(e.tenants))
+	for id, s := range e.tenants {
+		tenants = append(tenants, TenantStats{
+			TenantID: id,
+			Weight:   s.weight,
+			LastVFT:  s.lastVFT,
+		})
+	}
+
+	return EngineStats{
+		VirtualTime: e.vtTracker.Snapshot().Current,
+		Tenants:     tenants,
+	}
+}

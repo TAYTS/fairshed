@@ -3,8 +3,10 @@ package engine
 import (
 	"sync"
 	"testing"
+	"time"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	"github.com/tayts/fairsched/internal/tenant"
 )
 
@@ -301,6 +303,94 @@ func TestConcurrentComputeVFT_MultiTenant(t *testing.T) {
 
 	// No data race — race detector will catch issues
 	assert.GreaterOrEqual(t, e.vtTracker.vt.ActiveWeight, 0.0)
+}
+
+// --- Stats ---
+
+func TestStats_NoTenants(t *testing.T) {
+	e := NewVFTEngine()
+	stats := e.Stats()
+	assert.Empty(t, stats.Tenants)
+	assert.Equal(t, 0.0, stats.VirtualTime)
+}
+
+func TestStats_SingleTenant_NoTasks(t *testing.T) {
+	e := NewVFTEngine()
+	e.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 2.0})
+
+	stats := e.Stats()
+	require.Len(t, stats.Tenants, 1)
+	ts := stats.Tenants[0]
+	assert.Equal(t, "t1", ts.TenantID)
+	assert.Equal(t, 2.0, ts.Weight)
+	assert.Equal(t, 0.0, ts.LastVFT)
+}
+
+func TestStats_LastVFTReflectsMostRecentComputeVFT(t *testing.T) {
+	e := NewVFTEngine()
+	e.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0})
+
+	vft, _ := e.ComputeVFT(&Task{TenantID: "t1", Cost: 3.0})
+
+	stats := e.Stats()
+	require.Len(t, stats.Tenants, 1)
+	assert.Equal(t, vft, stats.Tenants[0].LastVFT)
+}
+
+func TestStats_MultiTenant(t *testing.T) {
+	e := NewVFTEngine()
+	e.RegisterTenant(&tenant.Tenant{ID: "a", Weight: 1.0})
+	e.RegisterTenant(&tenant.Tenant{ID: "b", Weight: 2.0})
+	_, _ = e.ComputeVFT(&Task{TenantID: "a", Cost: 1.0})
+	_, _ = e.ComputeVFT(&Task{TenantID: "b", Cost: 2.0})
+
+	stats := e.Stats()
+	require.Len(t, stats.Tenants, 2)
+
+	byID := make(map[string]TenantStats, len(stats.Tenants))
+	for _, ts := range stats.Tenants {
+		byID[ts.TenantID] = ts
+	}
+	assert.Equal(t, 1.0, byID["a"].Weight)
+	assert.Equal(t, 2.0, byID["b"].Weight)
+	assert.Positive(t, byID["a"].LastVFT)
+	assert.Positive(t, byID["b"].LastVFT)
+}
+
+func TestStats_VirtualTimeDoesNotAdvance(t *testing.T) {
+	e := NewVFTEngine()
+	e.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0})
+
+	// ComputeVFT calls vtTracker.Get() which advances and commits VT.
+	_, _ = e.ComputeVFT(&Task{TenantID: "t1", Cost: 1.0})
+	committed := e.vtTracker.vt.Current
+
+	time.Sleep(20 * time.Millisecond)
+
+	// Stats must read the committed value, not advance VT further.
+	assert.Equal(t, committed, e.Stats().VirtualTime, "Stats must not advance virtual time")
+}
+
+func TestStats_Concurrent(t *testing.T) {
+	e := NewVFTEngine()
+	e.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0})
+
+	const n = 100
+	var wg sync.WaitGroup
+	wg.Add(n * 2)
+
+	for range n {
+		go func() {
+			defer wg.Done()
+			_, _ = e.ComputeVFT(&Task{TenantID: "t1", Cost: 1.0})
+		}()
+		go func() {
+			defer wg.Done()
+			_ = e.Stats()
+		}()
+	}
+	wg.Wait()
+	// correctness verified by the race detector
 }
 
 // --- Benchmarks ---
