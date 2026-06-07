@@ -39,6 +39,5 @@ message FailTaskRequest {
   string task_id = 1;
   string worker_id = 2;
   string error = 3;
-  bool retry = 4;
 }
 message FailTaskResponse {}
