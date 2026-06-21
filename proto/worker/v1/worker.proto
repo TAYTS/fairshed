@@ -18,7 +18,6 @@ service WorkerService {
 
 message PollTaskRequest {
   string worker_id = 1;
-  string tenant_id = 2; // worker polls for a specific tenant
 }
 
 message PollTaskResponse {
