@@ -1,4 +1,4 @@
-.PHONY: gen build build-server build-worker
+.PHONY: gen build build-server build-worker start-server start-worker
 
 # gen: generate protobuf stubs
 gen:
@@ -14,3 +14,8 @@ build-worker:
 ## build: compile all binaries
 build: build-server build-worker
 
+start-server:
+	go run ./cmd/fairsched-server
+
+start-worker:
+	go run ./cmd/worker
