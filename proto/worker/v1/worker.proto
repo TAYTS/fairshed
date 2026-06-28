@@ -4,10 +4,12 @@ package worker.v1;
 option go_package = "github.com/tayts/fairsched/gen/worker/v1;workerv1";
 
 service WorkerService {
-  // PollTask is a server-streaming RPC.
-  // Worker sends one request, server streams tasks back as they become available.
-  // When the worker disconnects, the server re-enqueues any unacknowledged tasks.
-  rpc PollTask(PollTaskRequest) returns (stream PollTaskResponse);
+  // PollTask long-polls for a task for up to 30 seconds.
+  // Returns the next task when one is available.
+  // Returns NOT_FOUND if the poll window elapses with no task — the worker should retry immediately; the server is healthy.
+  // Returns any other error on failure — the worker should back off before retrying.
+  // Workers should call this in a loop, reusing the same connection (one call per task).
+  rpc PollTask(PollTaskRequest) returns (PollTaskResponse);
 
   // CompleteTask signals a task finished successfully.
   rpc CompleteTask(CompleteTaskRequest) returns (CompleteTaskResponse);

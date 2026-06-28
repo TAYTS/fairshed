@@ -2,68 +2,21 @@ package workerapi
 
 import (
 	"context"
-	"errors"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
-	"google.golang.org/grpc/metadata"
 	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/tayts/fairsched/gen/worker/v1"
 	"github.com/tayts/fairsched/internal/dispatcher"
 	"github.com/tayts/fairsched/internal/engine"
-	"github.com/tayts/fairsched/internal/limiter"
 	"github.com/tayts/fairsched/internal/store"
 	"github.com/tayts/fairsched/internal/tenant"
 )
-
-// mockStream is a test double for grpc.ServerStreamingServer[workerv1.PollTaskResponse].
-//
-//   - Set cancelFn to cancel the stream context after the first successful Send
-//     (idiomatic way to stop PollTask after asserting one delivery).
-//   - Set sendErr to make every Send return that error.
-//   - Set onSend to run a side-effect just before Send returns sendErr (only
-//     fired on the error path); useful for stopping the dispatcher so the
-//     subsequent ReEnqueue call also fails.
-type mockStream struct {
-	ctx      context.Context
-	cancelFn context.CancelFunc // called after first successful Send; nil = no-op
-	onSend   func()             // called just before returning sendErr; nil = no-op
-
-	mu      sync.Mutex
-	sent    []*workerv1.PollTaskResponse
-	sendErr error
-}
-
-var _ grpc.ServerStreamingServer[workerv1.PollTaskResponse] = (*mockStream)(nil)
-
-func (m *mockStream) Send(resp *workerv1.PollTaskResponse) error {
-	if m.sendErr != nil {
-		if m.onSend != nil {
-			m.onSend()
-		}
-		return m.sendErr
-	}
-	m.mu.Lock()
-	m.sent = append(m.sent, resp)
-	m.mu.Unlock()
-	if m.cancelFn != nil {
-		m.cancelFn()
-	}
-	return nil
-}
-
-func (m *mockStream) Context() context.Context     { return m.ctx }
-func (m *mockStream) SetHeader(metadata.MD) error  { return nil }
-func (m *mockStream) SendHeader(metadata.MD) error { return nil }
-func (m *mockStream) SetTrailer(metadata.MD)       {}
-func (m *mockStream) SendMsg(any) error            { return nil }
-func (m *mockStream) RecvMsg(any) error            { return nil }
 
 // newTestServer creates a fresh WorkerServer wired to a real Dispatcher
 // and a real TaskStore. Tenant "t1" is registered with DefaultConcurrency.
@@ -100,7 +53,7 @@ func setupDispatchedTask(t *testing.T, disp *dispatcher.Dispatcher, s *store.Tas
 // PollTask
 // ---------------------------------------------------------------------------
 
-func TestPollTask_DequeuesAndSendsTask(t *testing.T) {
+func TestPollTask_DequeuesAndReturnsTask(t *testing.T) {
 	srv, disp, s := newTestServer(t)
 
 	enqueueTask(t, disp, s, &engine.Task{
@@ -110,16 +63,9 @@ func TestPollTask_DequeuesAndSendsTask(t *testing.T) {
 		Metadata: map[string]any{"type": "snorlax", "payload": "pokeball"},
 	})
 
-	ctx, cancel := context.WithCancel(context.Background())
-	stream := &mockStream{ctx: ctx, cancelFn: cancel}
+	resp, err := srv.PollTask(context.Background(), &workerv1.PollTaskRequest{WorkerId: "w1"})
 
-	err := srv.PollTask(&workerv1.PollTaskRequest{WorkerId: "w1"}, stream)
-
-	// After the first successful send, cancelFn fires. Dequeue returns
-	// context.Canceled on the next iteration.
-	assert.ErrorIs(t, err, context.Canceled)
-	require.Len(t, stream.sent, 1, "exactly one task should be sent before context is cancelled")
-	resp := stream.sent[0]
+	require.NoError(t, err)
 	assert.Equal(t, "task-1", resp.TaskId)
 	assert.Equal(t, "t1", resp.TenantId)
 	assert.Equal(t, 2.5, resp.Cost)
@@ -127,116 +73,80 @@ func TestPollTask_DequeuesAndSendsTask(t *testing.T) {
 	assert.Equal(t, "pokeball", resp.Payload)
 }
 
-func TestPollTask_ContextCancelledStopsLoop(t *testing.T) {
+func TestPollTask_BlocksUntilTaskAvailable(t *testing.T) {
+	srv, disp, s := newTestServer(t)
+
+	ctx, cancel := context.WithCancel(context.Background())
+
+	var (
+		resp    *workerv1.PollTaskResponse
+		pollErr error
+		wg      sync.WaitGroup
+	)
+	wg.Go(func() {
+		resp, pollErr = srv.PollTask(ctx, &workerv1.PollTaskRequest{WorkerId: "w1"})
+	})
+
+	time.Sleep(20 * time.Millisecond) // confirm it's blocking with empty queue
+	enqueueTask(t, disp, s, &engine.Task{ID: "task-1", TenantID: "t1", Cost: 1.0})
+	wg.Wait()
+	cancel()
+
+	require.NoError(t, pollErr)
+	assert.Equal(t, "task-1", resp.TaskId)
+}
+
+func TestPollTask_ContextCancelledWhileBlocking(t *testing.T) {
 	srv, _, _ := newTestServer(t)
 
 	ctx, cancel := context.WithCancel(context.Background())
-	stream := &mockStream{ctx: ctx}
 
 	var pollErr error
 	var wg sync.WaitGroup
-	wg.Add(1)
 	wg.Go(func() {
-		defer wg.Done()
-		pollErr = srv.PollTask(&workerv1.PollTaskRequest{WorkerId: "w1"}, stream)
+		_, pollErr = srv.PollTask(ctx, &workerv1.PollTaskRequest{WorkerId: "w1"})
 	})
 
 	time.Sleep(20 * time.Millisecond) // let the goroutine block on Dequeue
 	cancel()
 	wg.Wait()
 
-	assert.ErrorIs(t, pollErr, context.Canceled)
-	assert.Empty(t, stream.sent, "no tasks should be sent when context is cancelled before any task arrives")
+	// Parent context cancelled -> Dequeue returns context.Canceled, which the
+	// server wraps as Unavailable (real failure, worker should back off).
+	assert.Equal(t, codes.Unavailable, status.Code(pollErr))
 }
 
-func TestPollTask_MarkDispatchedFails_SkipsAndReleasesSlot(t *testing.T) {
+func TestPollTask_PollTimeoutReturnsNotFound(t *testing.T) {
+	srv, _, _ := newTestServer(t)
+	srv.pollTimeout = 30 * time.Millisecond // no queue, window expires quickly
+
+	_, err := srv.PollTask(context.Background(), &workerv1.PollTaskRequest{WorkerId: "w1"})
+
+	// Poll window elapsed with no task → NOT_FOUND (worker retries immediately).
+	assert.Equal(t, codes.NotFound, status.Code(err))
+}
+
+func TestPollTask_MarkDispatchedFails_ReleasesSlotAndReturnsError(t *testing.T) {
 	srv, disp, s := newTestServer(t)
-	// Use limit=1 so we can verify the slot is released after the skip.
+	// Use limit=1 so we can verify the slot is released after the failure.
 	disp.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: 1})
 
 	enqueueTask(t, disp, s, &engine.Task{ID: "task-1", TenantID: "t1", Cost: 1.0})
 
-	// Pre-dispatch so that MarkDispatched inside PollTask will fail with
-	// ErrTaskHasDispatched — simulating a race where the store is ahead of
-	// the dispatcher.
+	// Pre-dispatch so that MarkDispatched inside PollTask fails with
+	// ErrTaskHasDispatched — simulates a race where the store is ahead of the dispatcher.
 	require.NoError(t, s.MarkDispatched("task-1", "other-worker"))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	stream := &mockStream{ctx: ctx}
+	_, err := srv.PollTask(context.Background(), &workerv1.PollTaskRequest{WorkerId: "w1"})
 
-	var pollErr error
-	var wg sync.WaitGroup
-	wg.Add(1)
-	wg.Go(func() {
-		defer wg.Done()
-		pollErr = srv.PollTask(&workerv1.PollTaskRequest{WorkerId: "w1"}, stream)
-	})
+	require.Error(t, err)
+	assert.Equal(t, codes.Internal, status.Code(err))
 
-	// Give the goroutine time to dequeue, fail MarkDispatched, call Complete,
-	// and block on the next Dequeue call (queue is now empty).
-	time.Sleep(20 * time.Millisecond)
-	cancel()
-	wg.Wait()
-
-	assert.ErrorIs(t, pollErr, context.Canceled)
-	assert.Empty(t, stream.sent, "no task should be streamed when MarkDispatched fails")
-
-	// The skipped task called Complete, which released the slot.
+	// The failed task called Complete, which released the slot.
 	// With limit=1, a fresh Enqueue must now succeed.
 	newTask := &engine.Task{ID: "task-2", TenantID: "t1", Cost: 1.0}
 	require.NoError(t, s.Create(newTask))
-	assert.NoError(t, disp.Enqueue(newTask), "slot must be released after the skipped task")
-}
-
-func TestPollTask_SendFails_ReEnqueuesTask(t *testing.T) {
-	srv, disp, s := newTestServer(t)
-	// Use limit=1 to verify slot accounting: the slot must stay held while the
-	// task sits back in the queue after the failed send.
-	disp.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: 1})
-
-	enqueueTask(t, disp, s, &engine.Task{ID: "task-1", TenantID: "t1", Cost: 1.0})
-
-	sendErr := errors.New("connection reset by peer")
-	stream := &mockStream{ctx: context.Background(), sendErr: sendErr}
-
-	err := srv.PollTask(&workerv1.PollTaskRequest{WorkerId: "w1"}, stream)
-
-	assert.ErrorIs(t, err, sendErr, "the original send error must be propagated")
-	assert.Equal(t, 1, disp.Len(), "task must be back in the queue after the failed send")
-
-	// The slot is still held (carried over by ReEnqueue).
-	// A fresh Enqueue must be rejected because the limit is already at capacity.
-	newTask := &engine.Task{ID: "task-2", TenantID: "t1", Cost: 1.0}
-	require.NoError(t, s.Create(newTask))
-	assert.ErrorIs(t, disp.Enqueue(newTask), limiter.ErrLimitExceeded,
-		"slot must remain held while the re-enqueued task is in the queue")
-}
-
-func TestPollTask_SendFails_ReEnqueueAlsoFails_TaskLost(t *testing.T) {
-	srv, disp, s := newTestServer(t)
-	// limit=1 so we can observe slot accounting afterwards.
-	disp.RegisterTenant(&tenant.Tenant{ID: "t1", Weight: 1.0, MaxConcurrency: 1})
-
-	enqueueTask(t, disp, s, &engine.Task{ID: "task-1", TenantID: "t1", Cost: 1.0})
-
-	sendErr := errors.New("connection reset by peer")
-	stream := &mockStream{
-		ctx:     context.Background(),
-		sendErr: sendErr,
-		// Stop the dispatcher inside Send so that the immediately following
-		// ReEnqueue call sees a stopped dispatcher and returns ErrStopped.
-		onSend: func() { disp.Stop() },
-	}
-
-	err := srv.PollTask(&workerv1.PollTaskRequest{WorkerId: "w1"}, stream)
-
-	// PollTask must surface both errors via errors.Join.
-	assert.ErrorIs(t, err, sendErr, "original send error must be present")
-	assert.ErrorIs(t, err, dispatcher.ErrStopped, "re-enqueue error must be present")
-
-	// ReEnqueue releases the slot when the dispatcher is stopped, so the queue
-	// is empty and the slot is no longer held.
-	assert.Equal(t, 0, disp.Len(), "task must NOT be in the queue (re-enqueue failed)")
+	assert.NoError(t, disp.Enqueue(newTask), "slot must be released after MarkDispatched failure")
 }
 
 // ---------------------------------------------------------------------------
