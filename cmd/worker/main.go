@@ -11,7 +11,9 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	workerv1 "github.com/tayts/fairsched/gen/worker/v1"
 )
@@ -44,52 +46,39 @@ func run() error {
 	return err
 }
 
-// runPollLoop opens a streaming poll to the server and reconnects with
-// exponential backoff if the stream drops. Returns when ctx is cancelled.
+// runPollLoop calls PollTask in loop to retrieve single task per call, reusing the same connection.
+// Transient errors are retried with exponential backoff.
+// Returns nil when ctx is cancelled.
 func runPollLoop(ctx context.Context, client workerv1.WorkerServiceClient, workerID string) error {
 	const maxBackoff = 30 * time.Second
 	backoff := time.Second
 
+	log.Printf("worker %s ready, polling for tasks", workerID)
 	for {
-		err := poll(ctx, client, workerID)
+		task, err := client.PollTask(ctx, &workerv1.PollTaskRequest{WorkerId: workerID})
 		if ctx.Err() != nil {
 			return nil
 		}
-		log.Printf("stream closed, reconnecting in %s: %v", backoff, err)
-		select {
-		case <-time.After(backoff):
-		case <-ctx.Done():
-			return nil
+		if status.Code(err) == codes.NotFound {
+			backoff = time.Second // server healthy, reset backoff
+			continue              // poll timeout, no task available - retry immediately
 		}
-		if backoff < maxBackoff {
-			backoff *= 2
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
-		}
-	}
-}
-
-// poll opens one PollTask stream and processes tasks until the stream closes
-// or ctx is cancelled. Returns nil on clean shutdown, error otherwise.
-func poll(ctx context.Context, client workerv1.WorkerServiceClient, workerID string) error {
-	stream, err := client.PollTask(ctx, &workerv1.PollTaskRequest{WorkerId: workerID})
-	if err != nil {
-		return err
-	}
-
-	log.Printf("worker %s connected, waiting for tasks", workerID)
-
-	for {
-		task, err := stream.Recv()
 		if err != nil {
-			// context cancelled is not an error - just return
-			if ctx.Err() != nil {
+			log.Printf("PollTask error, retrying in %s: %v", backoff, err)
+			select {
+			case <-time.After(backoff):
+			case <-ctx.Done():
 				return nil
 			}
-			return err
+			if backoff < maxBackoff {
+				backoff *= 2
+				if backoff > maxBackoff {
+					backoff = maxBackoff
+				}
+			}
+			continue
 		}
-
+		backoff = time.Second // reset on successful task dispatch
 		processTask(ctx, client, workerID, task)
 	}
 }
