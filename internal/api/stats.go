@@ -52,13 +52,13 @@ func (h *StatsHandler) getStats(w http.ResponseWriter, r *http.Request) {
 	engineStats := h.dispatcher.Stats()
 	storeStats := h.store.TenantStats()
 
-	// Build the per-tenant worker-seconds map for the Jain's index calculation.
-	workerSeconds := make(map[string]float64, len(storeStats))
-	for id, st := range storeStats {
-		workerSeconds[id] = st.WorkerSeconds
-	}
-
 	tenants := make(map[string]TenantStats, len(engineStats.Tenants))
+
+	// Weight-normalised worker-seconds for Jain's index.
+	// Dividing by weight means a tenant with weight 2.0 that receives 2x throughput
+	// scores the same as a weight 1.0 tenant. Jain's = 1.0 means the scheduler
+	// is allocating capacity in exact proportion to weights.
+	normalised := make(map[string]float64, len(engineStats.Tenants))
 	for _, ts := range engineStats.Tenants {
 		st := storeStats[ts.TenantID]
 		tenants[ts.TenantID] = TenantStats{
@@ -69,12 +69,15 @@ func (h *StatsHandler) getStats(w http.ResponseWriter, r *http.Request) {
 			LastVFT:         ts.LastVFT,
 			WorkerSeconds:   st.WorkerSeconds,
 		}
+		if ts.Weight > 0 {
+			normalised[ts.TenantID] = st.WorkerSeconds / ts.Weight
+		}
 	}
 
 	writeJSON(w, http.StatusOK, StatsResponse{
 		QueueDepth:         h.dispatcher.Len(),
 		GlobalVirtualTime:  engineStats.VirtualTime,
-		JainsFairnessIndex: metrics.JainsFairnessIndex(workerSeconds),
+		JainsFairnessIndex: metrics.JainsFairnessIndex(normalised),
 		Tenants:            tenants,
 	})
 }
